@@ -829,6 +829,47 @@ export default function JRAPredictionTool() {
     return Number.isFinite(n) && n >= min && n <= max ? String(n) : "";
   };
 
+  const azureInteger = (value, min = -Infinity, max = Infinity) => {
+    const text = azureCell(value).replace(/,/g, "");
+    const m = text.match(/(?:^|\D)(-?\d{1,3})(?:\D|$)/);
+    if (!m) return "";
+    const n = Number(m[1]);
+    return Number.isInteger(n) && n >= min && n <= max ? String(n) : "";
+  };
+
+  const INVALID_HORSE_NAMES = new Set([
+    "selected", "select", "option", "undefined", "null", "馬名", "騎手", "斤量",
+    "人気", "オッズ", "出馬表", "タイム指数", "スタート", "追走", "上がり",
+  ]);
+
+  const cleanHorseName = (value) => {
+    const raw = String(value || "").replace(/[\s・･]/g, "").trim();
+    if (!raw || INVALID_HORSE_NAMES.has(raw.toLowerCase())) return "";
+    if (!/^[ァ-ヶーA-Za-z]{3,24}$/.test(raw)) return "";
+    return raw;
+  };
+
+  const nameFromComment = (comment) => {
+    const text = String(comment || "").replace(/[\s・･]/g, "");
+    const beforeStable = text.split(/[【\[]/)[0] || "";
+    const candidates = beforeStable.match(/[ァ-ヶー]{3,24}/g) || [];
+    return candidates
+      .map(cleanHorseName)
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length)[0] || "";
+  };
+
+  const sanitizeHorseRecord = (horse) => {
+    const h = { ...horse };
+    const cleaned = cleanHorseName(h.name);
+    h.name = cleaned || nameFromComment(h.comment);
+    const pop = Number(String(h.ninki ?? "").trim());
+    h.ninki = Number.isInteger(pop) && pop >= 1 && pop <= 20 ? String(pop) : "";
+    const odds = Number(String(h.odds ?? "").trim());
+    h.odds = Number.isFinite(odds) && odds > 0 && odds < 10000 ? String(odds) : "";
+    return h;
+  };
+
   const azureHorseName = (value) => {
     const text = azureCell(value)
       .replace(/[◎○▲△☆◇●◉◯]/g, " ")
@@ -837,6 +878,8 @@ export default function JRAPredictionTool() {
       .trim();
     const candidates = text.match(/[ァ-ヶーA-Za-z]{3,22}/g) || [];
     return candidates
+      .map(cleanHorseName)
+      .filter(Boolean)
       .filter((x) => !/^(タイム指数|スタート|追走|上がり|オッズ|チェック|切替|人気|出馬表)$/.test(x))
       .sort((a, b) => b.length - a.length)[0] || "";
   };
@@ -954,7 +997,7 @@ export default function JRAPredictionTool() {
       if (!h.jockey && jockey) h.jockey = jockey;
       const odds = nearestSpatialValue(row, headers.odds, (v) => azureNumber(v, 1, 9999), 0.12);
       if (!h.odds && odds) h.odds = odds;
-      const pop = nearestSpatialValue(row, headers.pop, (v) => azureNumber(v, 1, 20), 0.10) || row.text.match(/(\d{1,2})\s*人気/)?.[1] || "";
+      const pop = nearestSpatialValue(row, headers.pop, (v) => azureInteger(v, 1, 20), 0.10) || row.text.match(/(\d{1,2})\s*人気/)?.[1] || "";
       if (!h.ninki && pop) h.ninki = pop;
     }
     return list.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
@@ -980,7 +1023,12 @@ export default function JRAPredictionTool() {
         if (value) h[key] = value;
       };
       assign("best", headers.overall); assign("start", headers.start); assign("oikake", headers.chase); assign("agari", headers.finish);
-      assign("avg5", headers.avg5); assign("dist", headers.dist); assign("course", headers.course); assign("r3", headers.r3); assign("r2", headers.r2); assign("r1", headers.r1);
+      assign("avg5", headers.avg5);
+      if (recentMode) {
+        assign("r3", headers.r3); assign("r2", headers.r2); assign("r1", headers.r1);
+      }
+      // 「距離&コース」の結合見出しは同じ数値を複数列へ誤配置しやすいので自動投入しない。
+
       if (!h.best || !h.start || !h.oikake || !h.agari) {
         const numeric = row.lines
           .filter((line) => Number(line.centerX) > 0.24)
@@ -1099,7 +1147,7 @@ export default function JRAPredictionTool() {
       }
       const odds = oddsCol >= 0 ? azureNumber(row[oddsCol], 1, 9999) : "";
       if (odds) h.odds = odds;
-      const pop = popCol >= 0 ? azureNumber(row[popCol], 1, 20) : "";
+      const pop = popCol >= 0 ? azureInteger(row[popCol], 1, 20) : "";
       if (pop) h.ninki = pop;
       if (!h.odds || !h.ninki) {
         const op = rowText.match(/(\d{1,3}(?:\.\d+)?)\s*(\d{1,2})\s*人気/);
@@ -1146,11 +1194,12 @@ export default function JRAPredictionTool() {
       setVal("oikake", cols.chase, 0, 140);
       setVal("agari", cols.finish, 0, 140);
       setVal("avg5", cols.avg5, 0, 140);
-      setVal("dist", cols.dist, 0, 140);
-      setVal("course", cols.course, 0, 140);
-      setVal("r3", cols.r3, 0, 140);
-      setVal("r2", cols.r2, 0, 140);
-      setVal("r1", cols.r1, 0, 140);
+      if (recentMode) {
+        setVal("r3", cols.r3, 0, 140);
+        setVal("r2", cols.r2, 0, 140);
+        setVal("r1", cols.r1, 0, 140);
+      }
+      // 距離・コース指数は結合セル誤認識が多いため、確実な専用入力がある時だけ手動補完する。
     });
     const spatial = mergeAzureIndexSpatial(payload, list, recentMode);
     return spatial.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
@@ -1216,6 +1265,7 @@ export default function JRAPredictionTool() {
     if (payloads.comment) next = mergeAzureComments(payloads.comment, next);
 
     next = next
+      .map(sanitizeHorseRecord)
       .filter((h)=>h.name || h.best || h.start || h.oikake || h.agari || h.comment || h.odds || h.jockey)
       .sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
     setHorses(next);
@@ -1483,7 +1533,7 @@ export default function JRAPredictionTool() {
     oddsOn,
     decayScale,
     oddsStrength,
-    horses: horses.map((h) => ({ ...h })),
+    horses: horses.map((h) => sanitizeHorseRecord(h)),
     status: previous.status || "pending",
     savedAt: previous.savedAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -1516,7 +1566,7 @@ export default function JRAPredictionTool() {
     if (race.oddsOn !== undefined) setOddsOn(race.oddsOn);
     if (race.decayScale !== undefined) setDecayScale(race.decayScale);
     if (race.oddsStrength !== undefined) setOddsStrength(race.oddsStrength);
-    setHorses((race.horses || []).map((h) => ({ ...h, finish: h.finish || "" })));
+    setHorses((race.horses || []).map((h) => ({ ...sanitizeHorseRecord(h), finish: h.finish || "" })));
     setActiveSavedRaceId(race.id);
     setResultEntryMode(forResult);
     setSavedRacesOpen(false);
@@ -1863,7 +1913,15 @@ export default function JRAPredictionTool() {
                       </div>
                     </td>
                     <td className={cellBase}>
-                      <span className="font-bold text-red-600">{h._autoMark || h.mark}</span>
+                      <select
+                        value={h.mark || ""}
+                        onChange={(e) => updateHorse(h.id, "mark", e.target.value)}
+                        className="bg-transparent text-red-600 font-bold text-sm"
+                        aria-label={`${h.name || h.umaban}の印`}
+                      >
+                        <option value="">{h._autoMark || "—"}</option>
+                        {["◎","○","▲","△","☆","消"].map((m)=><option key={m} value={m}>{m}</option>)}
+                      </select>
                     </td>
                     <td className={`${cellBase} text-left font-bold text-gray-800 w-28`}>
                       <input
