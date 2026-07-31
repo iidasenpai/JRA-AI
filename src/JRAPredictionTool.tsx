@@ -103,6 +103,8 @@ export default function JRAPredictionTool() {
   const [scanFiles, setScanFiles] = useState({ race: null, standard: null, recent: null, pace: null, comment: null });
   const [scanPreview, setScanPreview] = useState({});
   const [scanText, setScanText] = useState({ race: "", standard: "", recent: "", pace: "", comment: "" });
+  const [azureDebug, setAzureDebug] = useState({});
+  const [azureLastError, setAzureLastError] = useState("");
   const [scanProgress, setScanProgress] = useState(0);
   const [scanBusy, setScanBusy] = useState(false);
   const [scanLog, setScanLog] = useState("");
@@ -1166,11 +1168,16 @@ export default function JRAPredictionTool() {
         body: JSON.stringify({ image, type }),
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload?.error || `${label}の解析に失敗しました`);
+      if (!response.ok) {
+        setAzureDebug((prev)=>({ ...prev, [type]: { httpStatus: response.status, ...payload } }));
+        throw new Error(payload?.error || `${label}の解析に失敗しました`);
+      }
       payloads[type] = payload;
       texts[type] = payload.text || "";
     }
     setScanText(texts);
+    setAzureDebug(payloads);
+    setAzureLastError("");
 
     let next = horses.map((h)=>({ ...h }));
     if (payloads.race) next = mergeAzureRaceTable(payloads.race, next);
@@ -1197,7 +1204,9 @@ export default function JRAPredictionTool() {
         setScanLog(`${count}頭をAzure OCRで反映しました。読み違いだけ表で修正してください。`);
       } catch (azureError) {
         console.warn("Azure OCR failed; falling back to local OCR", azureError);
-        setScanLog(`Azure解析に失敗したため端末内OCRへ切り替えます：${azureError?.message || "設定を確認してください"}`);
+        const azureMessage = azureError?.message || "設定を確認してください";
+        setAzureLastError(azureMessage);
+        setScanLog(`Azure解析に失敗したため端末内OCRへ切り替えます：${azureMessage}`);
         count = await analyzeWithLocalOcr(entries);
         setScanLog(`${count}頭を端末内OCRで反映しました。Azure設定も確認してください。`);
       }
@@ -1208,6 +1217,25 @@ export default function JRAPredictionTool() {
       setScanLog(`解析に失敗しました: ${error?.message || "通信状態を確認してください"}`);
       flash("スクショ解析に失敗しました");
     } finally { setScanBusy(false); }
+  };
+
+  const downloadAzureDebug = () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      azureError: azureLastError || null,
+      scanText,
+      azure: azureDebug,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `jra-azure-debug-${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    flash("Azure解析JSONを書き出しました");
   };
 
   // ---- JSON入出力 ----
@@ -1565,7 +1593,11 @@ export default function JRAPredictionTool() {
           </div>
           <details className="mt-2"><summary className="text-[10px] text-gray-400 cursor-pointer">OCR原文を確認・修正</summary>
             <div className="grid sm:grid-cols-2 gap-2 mt-2">{SCAN_TYPES.map(([type,label])=><div key={type}><div className="text-[10px] font-bold mb-1">{label}</div><textarea rows={4} value={scanText[type]} onChange={(e)=>setScanText((v)=>({...v,[type]:e.target.value}))} className="w-full border rounded p-1 text-[9px] font-mono"/></div>)}</div>
-            <button onClick={()=>{let next=horses.map(h=>({...h})); if(scanText.race)next=parseRaceText(scanText.race,next); if(scanText.standard)next=parseIndexText(scanText.standard,next,false); if(scanText.recent)next=parseIndexText(scanText.recent,next,true); if(scanText.pace)parsePaceText(scanText.pace); if(scanText.comment)next=parseCommentText(scanText.comment,next); setHorses(next); flash("修正したOCR原文を再反映しました");}} className="mt-2 bg-green-600 text-white text-xs font-bold px-3 py-2 rounded">修正テキストを再反映</button>
+            {azureLastError && <div className="mt-2 rounded border border-red-200 bg-red-50 p-2 text-[10px] text-red-700">Azureエラー: {azureLastError}</div>}
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button onClick={()=>{let next=horses.map(h=>({...h})); if(scanText.race)next=parseRaceText(scanText.race,next); if(scanText.standard)next=parseIndexText(scanText.standard,next,false); if(scanText.recent)next=parseIndexText(scanText.recent,next,true); if(scanText.pace)parsePaceText(scanText.pace); if(scanText.comment)next=parseCommentText(scanText.comment,next); setHorses(next); flash("修正したOCR原文を再反映しました");}} className="bg-green-600 text-white text-xs font-bold px-3 py-2 rounded">修正テキストを再反映</button>
+              <button onClick={downloadAzureDebug} className="bg-slate-700 text-white text-xs font-bold px-3 py-2 rounded">Azure解析JSONを書き出す</button>
+            </div>
           </details>
         </div>}
       </div>
