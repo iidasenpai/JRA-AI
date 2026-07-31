@@ -513,12 +513,85 @@ export default function JRAPredictionTool() {
     return { x:0, width:0 };
   };
 
+
+  const normalizeHorseNameCandidate = (value) => String(value || "")
+    .replace(/[\s・･]/g, "")
+    .replace(/[○◎△▲☆◇□■●◯]/g, "")
+    .replace(/[0-9０-９A-Za-z]/g, "")
+    .replace(/^[ー]+|[ー]+$/g, "");
+
+  const isLikelyHorseName = (value) => {
+    const name = normalizeHorseNameCandidate(value);
+    if (!/^[ァ-ヶー]{4,22}$/.test(name)) return false;
+    const stop = ["タイム指数","スタート","オイカケ","追走指数","アガリ指数","近走成績","タンショウオッズ","コメント","データ分析"];
+    return !stop.some((word)=>name.includes(word));
+  };
+
+  const recognizeNameColumn = async (Tesseract, img, type, progressBase, progressSpan) => {
+    const layout = rowLayout(type, img);
+    const col = nameColumnLayout(type, img);
+    if (!col.width) return {};
+    const tableTop = layout.y;
+    const tableHeight = layout.height;
+    const nameCanvas = cropCanvas(img, col.x, tableTop, col.width, tableHeight, 3.2);
+    const variants = [
+      { psm:"6", canvas:nameCanvas },
+      { psm:"11", canvas:nameCanvas },
+    ];
+    const votes = {};
+    for (let pass=0; pass<variants.length; pass++) {
+      const result = await Tesseract.recognize(variants[pass].canvas, "jpn", {
+        tessedit_pageseg_mode: variants[pass].psm,
+        preserve_interword_spaces:"1",
+        logger:(m)=>{ if(m.status==="recognizing text") setScanProgress(Math.round(progressBase + (pass+(m.progress||0))/variants.length*progressSpan)); }
+      });
+      const words = result?.data?.words || [];
+      words.forEach((word)=>{
+        const candidate = normalizeHorseNameCandidate(word.text);
+        if (!isLikelyHorseName(candidate)) return;
+        const cy = ((word.bbox?.y0 || 0) + (word.bbox?.y1 || 0)) / 2;
+        const originalY = cy / 3.2;
+        const row = Math.max(1, Math.min(18, Math.floor(originalY / (tableHeight / 11)) + 1));
+        const conf = Number(word.confidence || word.conf || 0);
+        votes[row] ||= [];
+        votes[row].push({ candidate, conf });
+      });
+      // Tesseract may merge words into lines. Keep one katakana block per OCR line as a fallback.
+      const lines = normalizeOcr(result?.data?.text || "").split("\n").map(x=>x.trim()).filter(Boolean);
+      lines.forEach((line, index)=>{
+        const candidates = (line.match(/[ァ-ヶー]{4,22}/g) || []).map(normalizeHorseNameCandidate).filter(isLikelyHorseName);
+        if (!candidates.length) return;
+        const row = Math.max(1, Math.min(11, index + 1));
+        votes[row] ||= [];
+        candidates.forEach(candidate=>votes[row].push({candidate, conf:35}));
+      });
+    }
+    const resultMap = {};
+    Object.entries(votes).forEach(([row, rawItems])=>{
+      const items = rawItems as Array<{candidate:string; conf:number}>;
+      const grouped: Record<string, number> = {};
+      items.forEach(({candidate,conf})=>{ grouped[candidate]=(grouped[candidate]||0)+Math.max(1,conf); });
+      const selected = Object.entries(grouped).sort((a,b)=>b[1]-a[1] || b[0].length-a[0].length)[0]?.[0];
+      if (selected) resultMap[row]=selected;
+    });
+    return resultMap;
+  };
+
   const recognizeHorseRows = async (Tesseract, file, type, baseList, progressBase, progressSpan) => {
     const img = await fileToImage(file);
     const layout = rowLayout(type, img);
     const nameLayout = nameColumnLayout(type, img);
     const list = baseList.length ? baseList.map((h)=>({...h})) : Array.from({length:11},(_,i)=>({...emptyHorse(),umaban:String(i+1)}));
     const rows = 11;
+    // Recognize the complete name column first. This preserves vertical position and avoids
+    // mixing jockey names or stable comments into the horse-name field.
+    const columnNames = type === "race"
+      ? await recognizeNameColumn(Tesseract, img, type, progressBase, progressSpan * 0.28)
+      : {};
+    Object.entries(columnNames).forEach(([row,name])=>{
+      const horse = list.find((x)=>String(x.umaban)===String(row));
+      if (horse && isLikelyHorseName(name)) horse.name = name;
+    });
     const rowH = layout.height / rows;
     for (let i=0;i<rows;i++) {
       setScanLog(`${SCAN_TYPES.find((x)=>x[0]===type)?.[1] || type}：${i+1}番を解析中…`);
@@ -535,14 +608,19 @@ export default function JRAPredictionTool() {
       if (!h) { h={...emptyHorse(),umaban:String(i+1)}; list.push(h); }
 
       // 馬名は専用の狭い列だけを別OCR。既に出馬表で確定済みなら指数画像では上書きしない。
-      if ((type === "race" || !h.name) && nameLayout.width > 0) {
+      if (!h.name && nameLayout.width > 0) {
         const nameCanvas = cropCanvas(img, nameLayout.x, rowY, nameLayout.width, rowH-pad*2, 3.0);
-        const nameResult = await Tesseract.recognize(nameCanvas, "jpn", {
-          tessedit_pageseg_mode: "7",
-          preserve_interword_spaces: "1",
-          logger:(m)=>{ if(m.status==="recognizing text") setScanProgress(Math.round(progressBase + ((i+0.65+(m.progress||0)*0.35)/rows)*progressSpan)); }
-        });
-        const candidate = bestHorseName(nameResult?.data?.text || "");
+        const attempts = [];
+        for (const psm of ["7","13"]) {
+          const nameResult = await Tesseract.recognize(nameCanvas, "jpn", {
+            tessedit_pageseg_mode: psm,
+            preserve_interword_spaces: "1",
+            logger:(m)=>{ if(m.status==="recognizing text") setScanProgress(Math.round(progressBase + ((i+0.65+(m.progress||0)*0.35)/rows)*progressSpan)); }
+          });
+          const candidate = bestHorseName(nameResult?.data?.text || "");
+          if (isLikelyHorseName(candidate)) attempts.push(candidate);
+        }
+        const candidate = attempts.sort((a,b)=>b.length-a.length)[0] || "";
         if (candidate) h.name=candidate;
       }
 
@@ -695,7 +773,8 @@ export default function JRAPredictionTool() {
         return x ? {...x,...Object.fromEntries(Object.entries(h).filter(([,v])=>v!==""))} : h;
       });
     }
-    next = next.filter((h)=>h.name || h.best || h.comment).sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
+    next = next.filter((h)=>h.name || h.best || h.start || h.oikake || h.agari || h.comment || h.odds || h.jockey)
+      .sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
     setHorses(next);
     return next.filter((h)=>h.name).length;
   };
