@@ -836,6 +836,144 @@ export default function JRAPredictionTool() {
     return "";
   };
 
+
+  const azureSpatialLines = (payload) => (payload?.pages || [])
+    .flatMap((page) => page?.lines || [])
+    .filter((line) => line && line.content)
+    .map((line) => ({ ...line, content: azureCell(line.content) }));
+
+  const azureMedian = (values) => {
+    const sorted = values.filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b);
+    if (!sorted.length) return 0.018;
+    return sorted[Math.floor(sorted.length / 2)];
+  };
+
+  const azureRowBands = (payload) => {
+    const lines = azureSpatialLines(payload);
+    const medianHeight = azureMedian(lines.map((line) => Number(line.height || 0)));
+    const anchors = lines
+      .filter((line) => /^(?:[1-9]|1\d|20)$/.test(line.content) && Number(line.centerX) < 0.18 && Number(line.centerY) > 0.18)
+      .map((line) => ({ n: Number(line.content), y: Number(line.centerY), x: Number(line.centerX) }))
+      .sort((a, b) => a.y - b.y);
+    const unique = [];
+    for (const anchor of anchors) {
+      if (!unique.some((item) => item.n === anchor.n || Math.abs(item.y - anchor.y) < medianHeight * 0.75)) unique.push(anchor);
+    }
+    return unique.map((anchor, index) => {
+      const prevY = index ? unique[index - 1].y : anchor.y - medianHeight * 2.5;
+      const nextY = index + 1 < unique.length ? unique[index + 1].y : anchor.y + medianHeight * 2.5;
+      const top = (prevY + anchor.y) / 2;
+      const bottom = (anchor.y + nextY) / 2;
+      const rowLines = lines.filter((line) => Number(line.centerY) >= top && Number(line.centerY) < bottom).sort((a, b) => Number(a.x) - Number(b.x));
+      return { umaban: String(anchor.n), y: anchor.y, top, bottom, lines: rowLines, text: rowLines.map((line) => line.content).join(" ") };
+    });
+  };
+
+  const azureHeaderCenters = (payload, aliases) => {
+    const lines = azureSpatialLines(payload);
+    const result: any = {};
+    Object.entries(aliases as Record<string, string[]>).forEach(([key, words]) => {
+      const hit = lines
+        .filter((line) => Number(line.centerY) < 0.55 && words.some((word) => line.content.includes(word)))
+        .sort((a, b) => Number(b.width || 0) - Number(a.width || 0))[0];
+      if (hit) result[key] = Number(hit.centerX);
+    });
+    return result;
+  };
+
+  const nearestSpatialValue = (row, centerX, parser, maxDistance = 0.11) => {
+    if (!Number.isFinite(centerX)) return "";
+    const candidates = row.lines
+      .map((line) => ({ line, distance: Math.abs(Number(line.centerX) - centerX), value: parser(line.content) }))
+      .filter((item) => item.value !== "" && item.distance <= maxDistance)
+      .sort((a, b) => a.distance - b.distance);
+    return candidates[0]?.value || "";
+  };
+
+  const mergeAzureRaceSpatial = (payload, baseList) => {
+    const rows = azureRowBands(payload);
+    const list = baseList.map((h) => ({ ...h }));
+    const headers: any = azureHeaderCenters(payload, { name: ["馬名"], jockey: ["騎手"], weight: ["斤量"], odds: ["オッズ", "単勝"], pop: ["人気"] });
+    for (const row of rows) {
+      let h = list.find((x) => String(x.umaban) === row.umaban);
+      if (!h) { h = { ...emptyHorse(), umaban: row.umaban }; list.push(h); }
+      const nameCandidates = row.lines
+        .filter((line) => Number(line.centerX) > 0.10 && Number(line.centerX) < 0.62)
+        .map((line) => azureHorseName(line.content))
+        .filter((name) => name && name.length >= 3)
+        .sort((a, b) => b.length - a.length);
+      const nearestName = nearestSpatialValue(row, headers.name, azureHorseName, 0.22);
+      const name = nearestName || nameCandidates[0] || "";
+      if (name && !/^(馬名|厩舎コメント)$/.test(name)) h.name = name;
+      const sex = row.text.match(/(牡|牝|セ)\s*(\d{1,2})/);
+      if (sex) h.sex = `${sex[1]}${sex[2]}`;
+      const weight = nearestSpatialValue(row, headers.weight, (v) => azureNumber(v, 45, 65), 0.12) || (row.text.match(/(?:牡|牝|セ)\s*\d{1,2}.*?([45]\d(?:\.\d)?)/)?.[1] || "");
+      if (weight) h.weight = weight;
+      const jockey = nearestSpatialValue(row, headers.jockey, (v) => {
+        const m = azureCell(v).replace(/[△▲☆◇]/g, "").match(/[ァ-ヶー一-龠]{2,8}/);
+        return m && !/^(馬名|騎手|斤量|人気)$/.test(m[0]) ? m[0] : "";
+      }, 0.17);
+      if (jockey) h.jockey = jockey;
+      const odds = nearestSpatialValue(row, headers.odds, (v) => azureNumber(v, 1, 9999), 0.12);
+      if (odds) h.odds = odds;
+      const pop = nearestSpatialValue(row, headers.pop, (v) => azureNumber(v, 1, 20), 0.10) || row.text.match(/(\d{1,2})\s*人気/)?.[1] || "";
+      if (pop) h.ninki = pop;
+    }
+    return list.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
+  };
+
+  const mergeAzureIndexSpatial = (payload, baseList, recentMode) => {
+    const rows = azureRowBands(payload);
+    const list = baseList.map((h) => ({ ...h }));
+    const headers: any = azureHeaderCenters(payload, {
+      name: ["馬名"], overall: recentMode ? ["総合", "過去1年最高"] : ["全体", "最高"], start: ["スタート"], chase: ["追走"], finish: ["上がり"],
+      avg5: ["5走平均"], dist: ["距離"], course: ["コース"], r3: ["3走前", "3走"], r2: ["2走前", "2走"], r1: ["前走"],
+    });
+    for (const row of rows) {
+      let h = list.find((x) => String(x.umaban) === row.umaban);
+      if (!h) { h = { ...emptyHorse(), umaban: row.umaban }; list.push(h); }
+      if (!h.name) {
+        const name = nearestSpatialValue(row, headers.name, azureHorseName, 0.20) || row.lines.map((line) => azureHorseName(line.content)).filter(Boolean).sort((a,b)=>b.length-a.length)[0] || "";
+        if (name) h.name = name;
+      }
+      const assign = (key, center) => {
+        const value = nearestSpatialValue(row, center, (v) => azureNumber(v.replace(/\*/g, ""), 0, 140), 0.085);
+        if (value) h[key] = value;
+      };
+      assign("best", headers.overall); assign("start", headers.start); assign("oikake", headers.chase); assign("agari", headers.finish);
+      assign("avg5", headers.avg5); assign("dist", headers.dist); assign("course", headers.course); assign("r3", headers.r3); assign("r2", headers.r2); assign("r1", headers.r1);
+      if (!h.best || !h.start || !h.oikake || !h.agari) {
+        const numeric = row.lines
+          .filter((line) => Number(line.centerX) > 0.24)
+          .map((line) => azureNumber(line.content.replace(/\*/g, ""), 0, 140))
+          .filter(Boolean);
+        if (!recentMode && numeric.length >= 4) {
+          if (!h.best) h.best = numeric[0]; if (!h.start) h.start = numeric[1]; if (!h.oikake) h.oikake = numeric[2]; if (!h.agari) h.agari = numeric[3];
+          if (!h.avg5 && numeric[4]) h.avg5 = numeric[4];
+        }
+      }
+    }
+    return list.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
+  };
+
+  const mergeAzureCommentSpatial = (payload, baseList) => {
+    const rows = azureRowBands(payload);
+    const list = baseList.map((h) => ({ ...h }));
+    for (const row of rows) {
+      const h = list.find((x) => String(x.umaban) === row.umaban);
+      if (!h) continue;
+      const comment = row.lines
+        .filter((line) => Number(line.centerX) > 0.08)
+        .map((line) => line.content)
+        .filter((text) => text !== h.name && !/^(?:[1-9]|1\d|20)$/.test(text))
+        .join(" ")
+        .replace(new RegExp(`^[○◎△▲]?${h.name ? h.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : ""}\\s*`), "")
+        .trim();
+      if (comment.length >= 6) { h.comment = comment.slice(0, 500); h.condition = String(commentScore(h.comment)); }
+    }
+    return list;
+  };
+
   const pickAzureTable = (tables, type) => {
     const scored = (tables || []).map((table) => {
       const rows = table?.rows || [];
@@ -854,7 +992,7 @@ export default function JRAPredictionTool() {
 
   const mergeAzureRaceTable = (payload, baseList) => {
     const table = pickAzureTable(payload.tables, "race");
-    if (!table) return enrichRaceFromLooseText(payload.text || "", baseList);
+    if (!table) return mergeAzureRaceSpatial(payload, baseList);
     const rows = table.rows || [];
     const nameCol = azureHeaderIndex(rows, ["馬名"]);
     const jockeyCol = azureHeaderIndex(rows, ["騎手"]);
@@ -893,12 +1031,13 @@ export default function JRAPredictionTool() {
         if (op) { if (!h.odds) h.odds = op[1]; if (!h.ninki) h.ninki = op[2]; }
       }
     });
-    return list.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
+    const spatial = mergeAzureRaceSpatial(payload, list);
+    return spatial.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
   };
 
   const mergeAzureIndexTable = (payload, baseList, recentMode) => {
     const table = pickAzureTable(payload.tables, recentMode ? "recent" : "standard");
-    if (!table) return parseIndexText(payload.text || "", baseList, recentMode);
+    if (!table) return mergeAzureIndexSpatial(payload, baseList, recentMode);
     const rows = table.rows || [];
     const list = baseList.map((h) => ({ ...h }));
     const cols = {
@@ -937,12 +1076,13 @@ export default function JRAPredictionTool() {
       setVal("r2", cols.r2, 0, 140);
       setVal("r1", cols.r1, 0, 140);
     });
-    return list.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
+    const spatial = mergeAzureIndexSpatial(payload, list, recentMode);
+    return spatial.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
   };
 
   const mergeAzureComments = (payload, baseList) => {
     const table = pickAzureTable(payload.tables, "comment");
-    if (!table) return parseCommentText(payload.text || "", baseList);
+    if (!table) return mergeAzureCommentSpatial(payload, baseList);
     const list = baseList.map((h) => ({ ...h }));
     (table.rows || []).forEach((row) => {
       const umaban = azureRowHorseNumber(row);
@@ -958,7 +1098,7 @@ export default function JRAPredictionTool() {
         h.condition = String(commentScore(h.comment));
       }
     });
-    return list;
+    return mergeAzureCommentSpatial(payload, list);
   };
 
   const analyzeWithAzure = async (entries) => {
