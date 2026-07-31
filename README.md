@@ -13,3 +13,12 @@
 ## 公開
 
 GitHubへ上書きするとVercelが自動デプロイします。
+
+## Azure Document Intelligence 設定
+
+VercelのProject Settingsで次の環境変数を登録し、登録後にRedeployしてください。
+
+- `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`
+- `AZURE_DOCUMENT_INTELLIGENCE_KEY`
+
+キーはGitHubやReactコードへ直接書かないでください。画像解析は `/api/analyze` のVercel FunctionからAzureへ送信され、Azureに失敗した場合のみ端末内OCRへフォールバックします。
