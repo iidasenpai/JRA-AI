@@ -108,6 +108,10 @@ export default function JRAPredictionTool() {
   const [scanProgress, setScanProgress] = useState(0);
   const [scanBusy, setScanBusy] = useState(false);
   const [scanLog, setScanLog] = useState("");
+  const [savedRaces, setSavedRaces] = useState<any[]>([]);
+  const [savedRacesOpen, setSavedRacesOpen] = useState(false);
+  const [resultEntryMode, setResultEntryMode] = useState(false);
+  const [activeSavedRaceId, setActiveSavedRaceId] = useState<string | null>(null);
 
   // ---- 永続化 ----
   useEffect(() => {
@@ -133,6 +137,11 @@ export default function JRAPredictionTool() {
           if (data.decayScale !== undefined) setDecayScale(data.decayScale);
           if (data.oddsStrength !== undefined) setOddsStrength(data.oddsStrength);
         }
+        const saved = await window.storage.get("jra-saved-races");
+        if (saved && saved.value) {
+          const items = JSON.parse(saved.value);
+          if (Array.isArray(items)) setSavedRaces(items);
+        }
       } catch (e) {
         // no saved data yet
       }
@@ -153,6 +162,16 @@ export default function JRAPredictionTool() {
     return () => clearTimeout(t);
   }, [loaded, raceName, track, surface, distance, going, raceClass, paceType, learningOn, learned, historyCount, horses, weights, agariBonus, oddsOn, decayScale, oddsStrength]);
 
+  useEffect(() => {
+    if (!loaded) return;
+    const t = setTimeout(async () => {
+      try {
+        await window.storage.set("jra-saved-races", JSON.stringify(savedRaces));
+      } catch (e) {}
+    }, 250);
+    return () => clearTimeout(t);
+  }, [loaded, savedRaces]);
+
   const flash = (msg) => {
     setStatus(msg);
     setTimeout(() => setStatus(""), 2000);
@@ -164,7 +183,11 @@ export default function JRAPredictionTool() {
   const updateHorse = (id, field, value) =>
     setHorses((h) => h.map((x) => (x.id === id ? { ...x, [field]: value } : x)));
   const clearAll = () => {
-    if (confirm("全ての出走馬データを削除します。よろしいですか？")) setHorses([]);
+    if (confirm("全ての出走馬データを削除します。よろしいですか？")) {
+      setHorses([]);
+      setActiveSavedRaceId(null);
+      setResultEntryMode(false);
+    }
   };
 
   // ---- 一括貼り付け ----
@@ -338,7 +361,7 @@ export default function JRAPredictionTool() {
       h.umaban = umaban; h.name = name;
       const joined = lines.slice(i, Math.min(i + 3, lines.length)).join(" ");
       const sex = joined.match(/(牡|牝|セ)\s*(\d{1,2})/);
-      if (sex) h.sex = `${sex[1]}${sex[2]}`;
+      if (!h.sex && sex) h.sex = `${sex[1]}${sex[2]}`;
       const weight = joined.match(/(?:牡|牝|セ)\s*\d{1,2}.*?([45]\d(?:\.\d)?)\s*(?:kg)?/);
       if (weight) h.weight = weight[1];
       const oddsPop = joined.match(/(\d{1,3}(?:\.\d)?)\s*(?:倍)?\s*(\d{1,2})\s*人気/);
@@ -919,20 +942,20 @@ export default function JRAPredictionTool() {
         .sort((a, b) => b.length - a.length);
       const nearestName = nearestSpatialValue(row, headers.name, azureHorseName, 0.22);
       const name = nearestName || nameCandidates[0] || "";
-      if (name && !/^(馬名|厩舎コメント)$/.test(name)) h.name = name;
+      if (!h.name && name && !/^(馬名|厩舎コメント)$/.test(name)) h.name = name;
       const sex = row.text.match(/(牡|牝|セ)\s*(\d{1,2})/);
       if (sex) h.sex = `${sex[1]}${sex[2]}`;
       const weight = nearestSpatialValue(row, headers.weight, (v) => azureNumber(v, 45, 65), 0.12) || (row.text.match(/(?:牡|牝|セ)\s*\d{1,2}.*?([45]\d(?:\.\d)?)/)?.[1] || "");
-      if (weight) h.weight = weight;
+      if (!h.weight && weight) h.weight = weight;
       const jockey = nearestSpatialValue(row, headers.jockey, (v) => {
         const m = azureCell(v).replace(/[△▲☆◇]/g, "").match(/[ァ-ヶー一-龠]{2,8}/);
         return m && !/^(馬名|騎手|斤量|人気)$/.test(m[0]) ? m[0] : "";
       }, 0.17);
-      if (jockey) h.jockey = jockey;
+      if (!h.jockey && jockey) h.jockey = jockey;
       const odds = nearestSpatialValue(row, headers.odds, (v) => azureNumber(v, 1, 9999), 0.12);
-      if (odds) h.odds = odds;
+      if (!h.odds && odds) h.odds = odds;
       const pop = nearestSpatialValue(row, headers.pop, (v) => azureNumber(v, 1, 20), 0.10) || row.text.match(/(\d{1,2})\s*人気/)?.[1] || "";
-      if (pop) h.ninki = pop;
+      if (!h.ninki && pop) h.ninki = pop;
     }
     return list.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
   };
@@ -952,6 +975,7 @@ export default function JRAPredictionTool() {
         if (name) h.name = name;
       }
       const assign = (key, center) => {
+        if (h[key] !== "" && h[key] !== null && h[key] !== undefined) return;
         const value = nearestSpatialValue(row, center, (v) => azureNumber(v.replace(/\*/g, ""), 0, 140), 0.085);
         if (value) h[key] = value;
       };
@@ -1215,6 +1239,8 @@ export default function JRAPredictionTool() {
         count = await analyzeWithLocalOcr(entries);
         setScanLog(`${count}頭を端末内OCRで反映しました。Azure設定も確認してください。`);
       }
+      setActiveSavedRaceId(null);
+      setResultEntryMode(false);
       setScanProgress(100);
       flash("スクショ解析が完了しました");
     } catch (error) {
@@ -1440,9 +1466,80 @@ export default function JRAPredictionTool() {
     });
   }, [computed]);
 
+  const currentRaceSnapshot = (id = crypto.randomUUID(), previous: any = {}): any => ({
+    ...previous,
+    id,
+    title: raceName.trim() || `${track} ${surface}${distance || ""}m ${raceClass}`.trim(),
+    raceName,
+    track,
+    surface,
+    distance,
+    going,
+    raceClass,
+    paceType,
+    learningOn,
+    weights,
+    agariBonus,
+    oddsOn,
+    decayScale,
+    oddsStrength,
+    horses: horses.map((h) => ({ ...h })),
+    status: previous.status || "pending",
+    savedAt: previous.savedAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  const saveRaceForLater = () => {
+    if (!horses.length) { flash("先に出走馬を解析してください"); return; }
+    const usable = horses.filter((h) => h.name || h.umaban);
+    if (!usable.length) { flash("保存できるレース情報がありません"); return; }
+    const existing = savedRaces.find((r) => r.id === activeSavedRaceId);
+    const id = existing?.id || crypto.randomUUID();
+    const snapshot = currentRaceSnapshot(id, existing || {});
+    snapshot.status = existing?.status === "completed" ? "completed" : "pending";
+    setSavedRaces((prev) => [snapshot, ...prev.filter((r) => r.id !== id)]);
+    setActiveSavedRaceId(id);
+    setResultEntryMode(false);
+    flash(existing ? "保存済みレースを更新しました" : "解析結果を保存しました");
+  };
+
+  const loadSavedRace = (race: any, forResult = false) => {
+    setRaceName(race.raceName || "");
+    setTrack(race.track || "東京");
+    setSurface(race.surface || "芝");
+    setDistance(race.distance || "");
+    setGoing(race.going || "良");
+    setRaceClass(race.raceClass || "3勝");
+    setPaceType(race.paceType || "M");
+    if (race.weights) setWeights(race.weights);
+    if (race.agariBonus !== undefined) setAgariBonus(race.agariBonus);
+    if (race.oddsOn !== undefined) setOddsOn(race.oddsOn);
+    if (race.decayScale !== undefined) setDecayScale(race.decayScale);
+    if (race.oddsStrength !== undefined) setOddsStrength(race.oddsStrength);
+    setHorses((race.horses || []).map((h) => ({ ...h, finish: h.finish || "" })));
+    setActiveSavedRaceId(race.id);
+    setResultEntryMode(forResult);
+    setSavedRacesOpen(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    flash(forResult ? "保存済みレースを読み込みました。着順を入力してください" : "保存済みレースを読み込みました");
+  };
+
+  const deleteSavedRace = (id: string) => {
+    if (!confirm("この保存済みレースを削除しますか？")) return;
+    setSavedRaces((prev) => prev.filter((r) => r.id !== id));
+    if (activeSavedRaceId === id) {
+      setActiveSavedRaceId(null);
+      setResultEntryMode(false);
+    }
+    flash("保存済みレースを削除しました");
+  };
+
   const saveResultAndLearn = () => {
+    if (!activeSavedRaceId) { flash("先に保存済みレースから対象レースを開いてください"); return; }
     const finished = ranked.filter((h) => num(h.finish) !== null && h._finalScore !== null);
     if (finished.length < 3) { flash("最低3頭の着順を入力してください"); return; }
+    const activeRecord = savedRaces.find((r) => r.id === activeSavedRaceId);
+    const shouldLearn = !activeRecord?.learnedApplied;
     const factors = {
       training: (h) => TRAINING_SCORE[h.training] ?? 0,
       pace: (h) => STYLE_PACE_SCORE[paceType]?.[h.runningStyle] ?? 0,
@@ -1454,21 +1551,31 @@ export default function JRAPredictionTool() {
       pedigree: (h) => h._pedigreeFit === null ? 0 : h._pedigreeFit - 50,
       condition: (h) => h._condition === null ? 0 : h._condition - 50,
     };
-    setLearned((prev) => {
-      const next = { ...prev };
-      Object.entries(factors).forEach(([key, getter]) => {
-        const top3 = finished.filter((h) => num(h.finish) <= 3);
-        const others = finished.filter((h) => num(h.finish) > 3);
-        if (!top3.length || !others.length) return;
-        const a = top3.reduce((sum,h)=>sum+getter(h),0)/top3.length;
-        const b = others.reduce((sum,h)=>sum+getter(h),0)/others.length;
-        const direction = a > b ? 0.03 : a < b ? -0.03 : 0;
-        next[key] = clamp((prev[key] ?? 1) + direction, 0.65, 1.35);
+    if (shouldLearn) {
+      setLearned((prev) => {
+        const next = { ...prev };
+        Object.entries(factors).forEach(([key, getter]) => {
+          const top3 = finished.filter((h) => num(h.finish) <= 3);
+          const others = finished.filter((h) => num(h.finish) > 3);
+          if (!top3.length || !others.length) return;
+          const a = top3.reduce((sum,h)=>sum+getter(h),0)/top3.length;
+          const b = others.reduce((sum,h)=>sum+getter(h),0)/others.length;
+          const direction = a > b ? 0.03 : a < b ? -0.03 : 0;
+          next[key] = clamp((prev[key] ?? 1) + direction, 0.65, 1.35);
+        });
+        return next;
       });
-      return next;
-    });
-    setHistoryCount((n) => n + 1);
-    flash("結果を保存し、補正値を学習しました");
+      setHistoryCount((n) => n + 1);
+    }
+    const updated = currentRaceSnapshot(activeSavedRaceId, activeRecord || {});
+    updated.status = "completed";
+    updated.completedAt = new Date().toISOString();
+    updated.learnedApplied = activeRecord?.learnedApplied || shouldLearn;
+    updated.horses = horses.map((h) => ({ ...h }));
+    setSavedRaces((prev) => [updated, ...prev.filter((r) => r.id !== activeSavedRaceId)]);
+    setResultEntryMode(false);
+    setSavedRacesOpen(true);
+    flash(shouldLearn ? "結果を保存し、補正値を学習しました" : "結果の修正を保存しました");
   };
 
   const setW = (key, val) => setWeights((w) => ({ ...w, [key]: Number(val) }));
@@ -1571,8 +1678,15 @@ export default function JRAPredictionTool() {
           <input type="checkbox" checked={learningOn} onChange={(e) => setLearningOn(e.target.checked)} />
           結果学習を予想へ反映（学習済み {historyCount}レース）
         </label>
-        <div className="text-[11px] text-gray-400 mt-1">着順を入力して「結果保存・学習」を押すと、調教・展開・適性補正を少しずつ調整します。</div>
+        <div className="text-[11px] text-gray-400 mt-1">解析後は「レースを保存」。レース終了後に保存済みレースを開いて着順を入力すると、補正値を少しずつ調整します。</div>
       </div>
+
+      {resultEntryMode && (
+        <div className="mx-3 mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3">
+          <div className="font-black text-amber-900">🏁 レース後結果入力モード</div>
+          <div className="mt-1 text-[11px] text-amber-700">保存済みレースを読み込んでいます。各馬の着順を入力し、下の「結果保存・学習」を押してください。</div>
+        </div>
+      )}
 
       {/* 操作ボタン */}
       <div className="mx-3 mt-3 bg-white rounded-xl shadow-sm border border-blue-200 overflow-hidden">
@@ -1611,11 +1725,54 @@ export default function JRAPredictionTool() {
         <button onClick={addHorse} className="bg-blue-700 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">＋ 1頭追加</button>
         <button onClick={() => setImportOpen((v) => !v)} className="bg-white border border-gray-300 text-xs font-bold px-3 py-2 rounded shadow-sm">一括貼り付け</button>
         <button onClick={doExport} className="bg-white border border-gray-300 text-xs font-bold px-3 py-2 rounded shadow-sm">JSON書き出し</button>
-        <button onClick={saveResultAndLearn} className="bg-purple-700 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">結果保存・学習</button>
+        {!resultEntryMode ? (
+          <button onClick={saveRaceForLater} className="bg-emerald-600 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">レースを保存</button>
+        ) : (
+          <>
+            <button onClick={saveResultAndLearn} className="bg-purple-700 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">結果保存・学習</button>
+            <button onClick={() => setResultEntryMode(false)} className="bg-white border border-gray-300 text-xs font-bold px-3 py-2 rounded shadow-sm">結果入力を閉じる</button>
+          </>
+        )}
+        <button onClick={() => setSavedRacesOpen((v) => !v)} className="bg-slate-800 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">保存済みレース {savedRaces.length ? `(${savedRaces.length})` : ""}</button>
         {horses.length > 0 && (
           <button onClick={clearAll} className="bg-white border border-red-300 text-red-500 text-xs font-bold px-3 py-2 rounded shadow-sm ml-auto">全削除</button>
         )}
       </div>
+
+      {savedRacesOpen && (
+        <div className="mx-3 mt-2 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+          <div className="mb-2 flex items-center justify-between">
+            <div>
+              <div className="font-black text-slate-800">保存済みレース</div>
+              <div className="text-[10px] text-slate-500">予想を保存し、レース終了後に「結果を入力」から呼び出します。</div>
+            </div>
+            <button onClick={() => setSavedRacesOpen(false)} className="text-xs text-slate-400">閉じる</button>
+          </div>
+          {savedRaces.length === 0 ? (
+            <div className="rounded bg-slate-50 p-4 text-center text-xs text-slate-400">保存済みレースはありません。</div>
+          ) : (
+            <div className="space-y-2">
+              {savedRaces.map((race) => (
+                <div key={race.id} className="rounded-lg border border-slate-200 p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-black text-slate-800">{race.title || "名称未設定のレース"}</div>
+                      <div className="mt-0.5 text-[10px] text-slate-500">{race.track}・{race.surface}{race.distance || ""}m・{race.going}・{race.raceClass}／{race.horses?.length || 0}頭</div>
+                      <div className="mt-1 text-[10px] text-slate-400">保存: {race.savedAt ? new Date(race.savedAt).toLocaleString("ja-JP") : "-"}</div>
+                    </div>
+                    <span className={`shrink-0 rounded px-2 py-1 text-[10px] font-bold ${race.status === "completed" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{race.status === "completed" ? "結果入力済み" : "結果待ち"}</span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button onClick={() => loadSavedRace(race, false)} className="rounded bg-slate-100 px-3 py-1.5 text-[11px] font-bold text-slate-700">予想を見る</button>
+                    <button onClick={() => loadSavedRace(race, true)} className="rounded bg-purple-700 px-3 py-1.5 text-[11px] font-bold text-white">{race.status === "completed" ? "結果を修正" : "結果を入力"}</button>
+                    <button onClick={() => deleteSavedRace(race.id)} className="rounded border border-red-200 px-3 py-1.5 text-[11px] font-bold text-red-500">削除</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {importOpen && (
         <div className="bg-white mx-3 mt-2 rounded-lg shadow-sm border border-gray-200 p-3">
@@ -1680,7 +1837,7 @@ export default function JRAPredictionTool() {
               <th className={colHeaderCls}>馬体増減</th>
               <th className={colHeaderCls}>血統</th>
               <th className={colHeaderCls}>状態</th>
-              <th className={colHeaderCls}>着順</th>
+              {resultEntryMode && <th className={colHeaderCls}>着順</th>}
               <th className={colHeaderCls}>総合指数</th>
               <th className={colHeaderCls}></th>
             </tr>
@@ -1745,7 +1902,7 @@ export default function JRAPredictionTool() {
                     {[["groundFit","馬場"],["classFit","級"],["jockeyIndex","騎"],["gateFit","枠"],["bodyChange","増減"],["pedigreeFit","血"],["condition","状"]].map(([f,p]) => (
                       <td key={f} className={cellBase}><input value={h[f] ?? ""} onChange={(e)=>updateHorse(h.id,f,e.target.value)} className="w-10 text-center border-none bg-transparent" placeholder={p}/></td>
                     ))}
-                    <td className={cellBase}><input value={h.finish ?? ""} onChange={(e)=>updateHorse(h.id,"finish",e.target.value)} className="w-8 text-center border border-gray-200 rounded" placeholder="着" /></td>
+                    {resultEntryMode && <td className={cellBase}><input inputMode="numeric" value={h.finish ?? ""} onChange={(e)=>updateHorse(h.id,"finish",e.target.value.replace(/[^0-9]/g, ""))} className="w-10 text-center border border-amber-300 bg-amber-50 rounded py-1 font-bold" placeholder="着" /></td>}
                     <td className={`${cellBase} font-black text-base ${h._rank === 1 ? "text-red-600" : h._rank === 2 ? "text-blue-600" : "text-gray-700"}`}>
                       {h._finalScore !== null ? h._finalScore.toFixed(1) : "-"}
                     </td>
@@ -1757,7 +1914,7 @@ export default function JRAPredictionTool() {
               })}
             {horses.length === 0 && (
               <tr>
-                <td colSpan={30} className="text-center text-sm text-gray-400 py-8">
+                <td colSpan={resultEntryMode ? 30 : 29} className="text-center text-sm text-gray-400 py-8">
                   出走馬データがありません。「一括貼り付け」または「＋1頭追加」で入力してください。
                 </td>
               </tr>
@@ -1770,7 +1927,7 @@ export default function JRAPredictionTool() {
         ※総合指数 = タイム4軸 ＋ 近走トレンド ＋ スタート/追走/上がり ＋ 展開・調教・馬場・クラス・騎手・枠・馬体重・血統・状態補正
         {surface === "芝" && agariBonus ? " ＋ 上がり補正" : ""}
         {oddsOn ? " ＋ 市場人気補正（低オッズを弱く加点・上限あり）" : ""}。
-        「未」は全体最高から自動推定した参考値です。
+        「未」は全体最高から自動推定した参考値です。解析後は「レースを保存」、レース終了後は「保存済みレース」から結果を入力します。
       </div>
     </div>
   );
