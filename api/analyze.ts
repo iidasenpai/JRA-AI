@@ -1,10 +1,14 @@
+export const maxDuration = 60;
+
 type VercelRequest = { method?: string; body?: any };
 type VercelResponse = { status: (code: number) => VercelResponse; json: (body: any) => any };
 
 const API_VERSION = "2024-11-30";
 const MODEL_ID = "prebuilt-layout";
-const MAX_POLLS = 40;
-const POLL_DELAY_MS = 750;
+const MAX_POLLS = 24;
+// F0は結果取得が20回/分まで。3.5秒間隔なら上限を超えにくい。
+const POLL_DELAY_MS = 3500;
+const MAX_RATE_LIMIT_RETRIES = 3;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -155,17 +159,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     let result: any = null;
+    let rateLimitRetries = 0;
     for (let i = 0; i < MAX_POLLS; i += 1) {
       await sleep(POLL_DELAY_MS);
       const poll = await fetch(operationLocation, {
         headers: { "Ocp-Apim-Subscription-Key": key },
       });
-      const data = await poll.json();
+      const raw = await poll.text();
+      let data: any = {};
+      try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
 
-      if (!poll.ok) {
-        throw new Error(`Azure取得エラー ${poll.status}: ${JSON.stringify(data).slice(0, 500)}`);
+      if (poll.status === 429) {
+        if (rateLimitRetries >= MAX_RATE_LIMIT_RETRIES) {
+          throw new Error(`Azure取得エラー 429: ${raw.slice(0, 500)}`);
+        }
+        rateLimitRetries += 1;
+        const retryHeader = Number(poll.headers.get("retry-after") || 0);
+        const message = String(data?.error?.message ?? raw);
+        const retryFromMessage = Number(message.match(/retry after\s+(\d+)/i)?.[1] || 0);
+        const waitSeconds = Math.max(5, retryHeader, retryFromMessage);
+        await sleep(waitSeconds * 1000);
+        i -= 1;
+        continue;
       }
 
+      if (!poll.ok) {
+        throw new Error(`Azure取得エラー ${poll.status}: ${raw.slice(0, 500)}`);
+      }
+
+      rateLimitRetries = 0;
       const status = String(data.status ?? "").toLowerCase();
       if (status === "succeeded") {
         result = data;
