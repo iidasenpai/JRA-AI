@@ -22,6 +22,61 @@ type AzureTable = {
   cells?: AzureCell[];
 };
 
+type AzureLine = {
+  content?: string;
+  polygon?: number[] | Array<{ x?: number; y?: number }>;
+};
+
+type AzurePage = {
+  pageNumber?: number;
+  width?: number;
+  height?: number;
+  lines?: AzureLine[];
+};
+
+function polygonBox(polygon: AzureLine["polygon"]) {
+  const points: Array<{ x: number; y: number }> = [];
+  if (Array.isArray(polygon)) {
+    if (polygon.length && typeof polygon[0] === "number") {
+      const nums = polygon as number[];
+      for (let i = 0; i + 1 < nums.length; i += 2) points.push({ x: Number(nums[i]), y: Number(nums[i + 1]) });
+    } else {
+      for (const point of polygon as Array<{ x?: number; y?: number }>) {
+        points.push({ x: Number(point?.x ?? 0), y: Number(point?.y ?? 0) });
+      }
+    }
+  }
+  if (!points.length) return { x: 0, y: 0, width: 0, height: 0, centerX: 0, centerY: 0 };
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  return { x, y, width: maxX - x, height: maxY - y, centerX: (x + maxX) / 2, centerY: (y + maxY) / 2 };
+}
+
+function normalizePages(pages: AzurePage[] = []) {
+  return pages.map((page, pageIndex) => {
+    const width = Math.max(1, Number(page.width ?? 1));
+    const height = Math.max(1, Number(page.height ?? 1));
+    const lines = (page.lines ?? []).map((line, lineIndex) => {
+      const box = polygonBox(line.polygon);
+      return {
+        lineIndex,
+        content: String(line.content ?? "").replace(/\s+/g, " ").trim(),
+        x: box.x / width,
+        y: box.y / height,
+        width: box.width / width,
+        height: box.height / height,
+        centerX: box.centerX / width,
+        centerY: box.centerY / height,
+      };
+    }).filter((line) => line.content);
+    return { pageIndex, pageNumber: Number(page.pageNumber ?? pageIndex + 1), width, height, lines };
+  });
+}
+
 function normalizeTables(tables: AzureTable[] = []) {
   return tables.map((table, tableIndex) => {
     const rowCount = Number(table.rowCount ?? 0);
@@ -128,6 +183,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const analyzeResult = result.analyzeResult ?? {};
     const content = String(analyzeResult.content ?? "");
     const tables = normalizeTables(analyzeResult.tables ?? []);
+    const pages = normalizePages(analyzeResult.pages ?? []);
     const text = [
       ...tables.map((table) => table.rows.map((row) => row.join("\t")).join("\n")),
       content,
@@ -138,7 +194,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       text,
       tables,
-      pages: analyzeResult.pages?.length ?? 0,
+      pages,
+      pageCount: pages.length,
       apiVersion: API_VERSION,
       model: MODEL_ID,
     });
