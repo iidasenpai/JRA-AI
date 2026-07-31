@@ -1535,10 +1535,11 @@ export default function JRAPredictionTool() {
   };
 
   const saveResultAndLearn = () => {
-    if (!activeSavedRaceId) { flash("先に保存済みレースから対象レースを開いてください"); return; }
+    const raceId = activeSavedRaceId;
+    if (!raceId) { flash("先に保存済みレースから対象レースを開いてください"); return; }
     const finished = ranked.filter((h) => num(h.finish) !== null && h._finalScore !== null);
     if (finished.length < 3) { flash("最低3頭の着順を入力してください"); return; }
-    const activeRecord = savedRaces.find((r) => r.id === activeSavedRaceId);
+    const activeRecord = savedRaces.find((r) => r.id === raceId);
     const shouldLearn = !activeRecord?.learnedApplied;
     const factors = {
       training: (h) => TRAINING_SCORE[h.training] ?? 0,
@@ -1567,12 +1568,12 @@ export default function JRAPredictionTool() {
       });
       setHistoryCount((n) => n + 1);
     }
-    const updated = currentRaceSnapshot(activeSavedRaceId, activeRecord || {});
+    const updated = currentRaceSnapshot(raceId, activeRecord || {});
     updated.status = "completed";
     updated.completedAt = new Date().toISOString();
     updated.learnedApplied = activeRecord?.learnedApplied || shouldLearn;
     updated.horses = horses.map((h) => ({ ...h }));
-    setSavedRaces((prev) => [updated, ...prev.filter((r) => r.id !== activeSavedRaceId)]);
+    setSavedRaces((prev) => [updated, ...prev.filter((r) => r.id !== raceId)]);
     setResultEntryMode(false);
     setSavedRacesOpen(true);
     flash(shouldLearn ? "結果を保存し、補正値を学習しました" : "結果の修正を保存しました");
