@@ -791,8 +791,179 @@ export default function JRAPredictionTool() {
     return canvas.toDataURL("image/jpeg", 0.9);
   };
 
+
+  const azureCell = (value) => String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/[｜|]/g, " ")
+    .trim();
+
+  const azureNumber = (value, min = -Infinity, max = Infinity) => {
+    const m = azureCell(value).replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+    if (!m) return "";
+    const n = Number(m[0]);
+    return Number.isFinite(n) && n >= min && n <= max ? String(n) : "";
+  };
+
+  const azureHorseName = (value) => {
+    const text = azureCell(value)
+      .replace(/[◎○▲△☆◇●◉◯]/g, " ")
+      .replace(/(?:牡|牝|セ)\s*\d{1,2}.*/, "")
+      .replace(/\d+(?:\.\d+)?.*/, "")
+      .trim();
+    const candidates = text.match(/[ァ-ヶーA-Za-z]{3,22}/g) || [];
+    return candidates
+      .filter((x) => !/^(タイム指数|スタート|追走|上がり|オッズ|チェック|切替|人気|出馬表)$/.test(x))
+      .sort((a, b) => b.length - a.length)[0] || "";
+  };
+
+  const azureHeaderIndex = (rows, aliases, maxHeaderRows = 6) => {
+    const limit = Math.min(maxHeaderRows, rows.length);
+    let best = -1;
+    for (let c = 0; c < Math.max(0, ...rows.slice(0, limit).map((r) => r.length)); c++) {
+      const combined = rows.slice(0, limit).map((r) => azureCell(r[c])).join(" ");
+      if (aliases.some((a) => combined.includes(a))) { best = c; break; }
+    }
+    return best;
+  };
+
+  const azureRowHorseNumber = (row) => {
+    for (let c = 0; c < Math.min(3, row.length); c++) {
+      const t = azureCell(row[c]);
+      if (/^(?:[1-9]|1\d|20)$/.test(t)) return t;
+      const m = t.match(/^(?:枠)?\s*([1-9]|1\d|20)(?:\s|$)/);
+      if (m) return m[1];
+    }
+    return "";
+  };
+
+  const pickAzureTable = (tables, type) => {
+    const scored = (tables || []).map((table) => {
+      const rows = table?.rows || [];
+      const text = rows.flat().join(" ");
+      const horseRows = rows.filter((r) => azureRowHorseNumber(r)).length;
+      let score = horseRows * 5 + Math.min(rows.length, 20);
+      if (type === "race" && /馬名|オッズ|人気|騎手/.test(text)) score += 35;
+      if (type === "standard" && /スタート|追走|上がり|5走平均/.test(text)) score += 40;
+      if (type === "recent" && /過去1年|前走|3走前|2走前|5走平均/.test(text)) score += 40;
+      if (type === "pace" && /前半3F|後半3F|予測タイム|ペース/.test(text)) score += 35;
+      if (type === "comment" && /厩舎|コメント|厩舎の話/.test(text)) score += 25;
+      return { table, score };
+    }).sort((a, b) => b.score - a.score);
+    return scored[0]?.table || null;
+  };
+
+  const mergeAzureRaceTable = (payload, baseList) => {
+    const table = pickAzureTable(payload.tables, "race");
+    if (!table) return enrichRaceFromLooseText(payload.text || "", baseList);
+    const rows = table.rows || [];
+    const nameCol = azureHeaderIndex(rows, ["馬名"]);
+    const jockeyCol = azureHeaderIndex(rows, ["騎手"]);
+    const weightCol = azureHeaderIndex(rows, ["斤量"]);
+    const oddsCol = azureHeaderIndex(rows, ["単勝オッズ", "オッズ"]);
+    const popCol = azureHeaderIndex(rows, ["人気"]);
+    const sexCol = azureHeaderIndex(rows, ["性齢", "年齢"]);
+    const list = baseList.map((h) => ({ ...h }));
+
+    rows.forEach((row) => {
+      const umaban = azureRowHorseNumber(row);
+      if (!umaban) return;
+      let name = nameCol >= 0 ? azureHorseName(row[nameCol]) : "";
+      if (!name) {
+        const all = row.map(azureHorseName).filter(Boolean);
+        name = all.sort((a, b) => b.length - a.length)[0] || "";
+      }
+      let h = list.find((x) => String(x.umaban) === umaban);
+      if (!h) { h = { ...emptyHorse(), umaban }; list.push(h); }
+      if (name) h.name = name;
+      const rowText = row.map(azureCell).join(" ");
+      const sex = sexCol >= 0 ? azureCell(row[sexCol]).match(/(牡|牝|セ)\s*(\d{1,2})/) : rowText.match(/(牡|牝|セ)\s*(\d{1,2})/);
+      if (sex) h.sex = `${sex[1]}${sex[2]}`;
+      const weight = weightCol >= 0 ? azureNumber(row[weightCol], 45, 65) : "";
+      if (weight) h.weight = weight;
+      if (jockeyCol >= 0) {
+        const jm = azureCell(row[jockeyCol]).replace(/[△▲☆◇]/g, "").match(/[ァ-ヶー一-龠]{2,8}/);
+        if (jm && !/^(馬名|騎手|牡|牝)$/.test(jm[0])) h.jockey = jm[0];
+      }
+      const odds = oddsCol >= 0 ? azureNumber(row[oddsCol], 1, 9999) : "";
+      if (odds) h.odds = odds;
+      const pop = popCol >= 0 ? azureNumber(row[popCol], 1, 20) : "";
+      if (pop) h.ninki = pop;
+      if (!h.odds || !h.ninki) {
+        const op = rowText.match(/(\d{1,3}(?:\.\d+)?)\s*(\d{1,2})\s*人気/);
+        if (op) { if (!h.odds) h.odds = op[1]; if (!h.ninki) h.ninki = op[2]; }
+      }
+    });
+    return list.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
+  };
+
+  const mergeAzureIndexTable = (payload, baseList, recentMode) => {
+    const table = pickAzureTable(payload.tables, recentMode ? "recent" : "standard");
+    if (!table) return parseIndexText(payload.text || "", baseList, recentMode);
+    const rows = table.rows || [];
+    const list = baseList.map((h) => ({ ...h }));
+    const cols = {
+      name: azureHeaderIndex(rows, ["馬名"]),
+      overall: azureHeaderIndex(rows, recentMode ? ["総合", "過去1年最高"] : ["全体", "最高"]),
+      start: azureHeaderIndex(rows, ["スタート"]),
+      chase: azureHeaderIndex(rows, ["追走"]),
+      finish: azureHeaderIndex(rows, ["上がり"]),
+      avg5: azureHeaderIndex(rows, ["5走平均"]),
+      dist: azureHeaderIndex(rows, ["距離"]),
+      course: azureHeaderIndex(rows, ["コース"]),
+      r3: azureHeaderIndex(rows, ["3走前", "3走"]),
+      r2: azureHeaderIndex(rows, ["2走前", "2走"]),
+      r1: azureHeaderIndex(rows, ["前走"]),
+    };
+    rows.forEach((row) => {
+      const umaban = azureRowHorseNumber(row);
+      if (!umaban) return;
+      let h = list.find((x) => String(x.umaban) === umaban);
+      if (!h) { h = { ...emptyHorse(), umaban }; list.push(h); }
+      if (!h.name && cols.name >= 0) {
+        const nm = azureHorseName(row[cols.name]);
+        if (nm) h.name = nm;
+      }
+      const setVal = (key, col, min = 0, max = 140) => {
+        if (col >= 0) { const v = azureNumber(row[col], min, max); if (v) h[key] = v; }
+      };
+      setVal("best", cols.overall, 0, 140);
+      setVal("start", cols.start, 0, 140);
+      setVal("oikake", cols.chase, 0, 140);
+      setVal("agari", cols.finish, 0, 140);
+      setVal("avg5", cols.avg5, 0, 140);
+      setVal("dist", cols.dist, 0, 140);
+      setVal("course", cols.course, 0, 140);
+      setVal("r3", cols.r3, 0, 140);
+      setVal("r2", cols.r2, 0, 140);
+      setVal("r1", cols.r1, 0, 140);
+    });
+    return list.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
+  };
+
+  const mergeAzureComments = (payload, baseList) => {
+    const table = pickAzureTable(payload.tables, "comment");
+    if (!table) return parseCommentText(payload.text || "", baseList);
+    const list = baseList.map((h) => ({ ...h }));
+    (table.rows || []).forEach((row) => {
+      const umaban = azureRowHorseNumber(row);
+      if (!umaban) return;
+      const h = list.find((x) => String(x.umaban) === umaban);
+      if (!h) return;
+      const cells = row.map(azureCell).filter(Boolean);
+      const comment = cells
+        .filter((x) => x !== umaban && x !== h.name && !/^枠?\d+$/.test(x))
+        .sort((a, b) => b.length - a.length)[0] || "";
+      if (comment.length >= 6) {
+        h.comment = comment.slice(0, 400);
+        h.condition = String(commentScore(h.comment));
+      }
+    });
+    return list;
+  };
+
   const analyzeWithAzure = async (entries) => {
     const texts = { ...scanText };
+    const payloads: any = {};
     for (let i = 0; i < entries.length; i++) {
       const [type, file] = entries[i];
       const label = SCAN_TYPES.find((x)=>x[0]===type)?.[1] || type;
@@ -806,16 +977,17 @@ export default function JRAPredictionTool() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload?.error || `${label}の解析に失敗しました`);
+      payloads[type] = payload;
       texts[type] = payload.text || "";
     }
     setScanText(texts);
 
     let next = horses.map((h)=>({ ...h }));
-    if (texts.race) next = enrichRaceFromLooseText(texts.race, next);
-    if (texts.standard) next = parseIndexText(texts.standard, next, false);
-    if (texts.recent) next = parseIndexText(texts.recent, next, true);
-    if (texts.pace) parsePaceText(texts.pace);
-    if (texts.comment) next = parseCommentText(texts.comment, next);
+    if (payloads.race) next = mergeAzureRaceTable(payloads.race, next);
+    if (payloads.standard) next = mergeAzureIndexTable(payloads.standard, next, false);
+    if (payloads.recent) next = mergeAzureIndexTable(payloads.recent, next, true);
+    if (payloads.pace) parsePaceText(payloads.pace.text || "");
+    if (payloads.comment) next = mergeAzureComments(payloads.comment, next);
 
     next = next
       .filter((h)=>h.name || h.best || h.start || h.oikake || h.agari || h.comment || h.odds || h.jockey)
