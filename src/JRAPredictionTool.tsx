@@ -420,39 +420,116 @@ export default function JRAPredictionTool() {
     if (course) { setTrack(course[1]); setDistance(course[2]); setSurface(course[3]==="芝"?"芝":"ダート"); }
   };
 
+  const imageToDataUrl = async (file) => {
+    const original = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("画像を読み込めませんでした"));
+      reader.readAsDataURL(file);
+    });
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const node = new Image();
+      node.onload = () => resolve(node);
+      node.onerror = () => reject(new Error("画像を開けませんでした"));
+      node.src = original;
+    });
+    const maxSide = 1800;
+    const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.82);
+  };
+
+  const applyAiResult = (data) => {
+    if (data.raceName) setRaceName(data.raceName);
+    if (JRA_TRACKS.includes(data.track)) setTrack(data.track);
+    if (["芝", "ダート"].includes(data.surface)) setSurface(data.surface);
+    if (data.distance) setDistance(String(data.distance));
+    if (GOINGS.includes(data.going)) setGoing(data.going);
+    if (RACE_CLASSES.includes(data.raceClass)) setRaceClass(data.raceClass);
+    if (PACE_TYPES.includes(data.paceType)) setPaceType(data.paceType);
+
+    const current = horses.map((h) => ({ ...h }));
+    const incoming = Array.isArray(data.horses) ? data.horses : [];
+    const merged = incoming.map((item, index) => {
+      const old = current.find((h) => String(h.umaban) === String(item.umaban)) || findHorse(item.name, current);
+      const base = old || emptyHorse();
+      const next = { ...base };
+      Object.keys(item).forEach((key) => {
+        const value = item[key];
+        if (value !== "" && value !== null && value !== undefined) next[key] = String(value);
+      });
+      if (!next.umaban) next.umaban = String(index + 1);
+      if (next.comment && !item.condition) next.condition = String(commentScore(next.comment));
+      return next;
+    });
+    if (merged.length) setHorses(merged.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99)));
+    return merged.length;
+  };
+
+  const analyzeWithOcrFallback = async (entries) => {
+    const Tesseract = await loadTesseract();
+    const texts = { ...scanText };
+    for (let i=0;i<entries.length;i++) {
+      const [type,file] = entries[i];
+      setScanLog(`AI解析に失敗したため、${SCAN_TYPES.find((x)=>x[0]===type)?.[1]}をOCR中…`);
+      const result = await Tesseract.recognize(file, "jpn+eng", {
+        logger: (m) => {
+          if (m.status === "recognizing text") setScanProgress(Math.round(((i + (m.progress || 0)) / entries.length) * 100));
+        }
+      });
+      texts[type] = result?.data?.text || "";
+    }
+    setScanText(texts);
+    let next = horses.map((h)=>({ ...h }));
+    if (texts.race) next = parseRaceText(texts.race, next);
+    if (texts.standard) next = parseIndexText(texts.standard, next, false);
+    if (texts.recent) next = parseIndexText(texts.recent, next, true);
+    if (texts.pace) parsePaceText(texts.pace);
+    if (texts.comment) next = parseCommentText(texts.comment, next);
+    setHorses(next);
+    return next.length;
+  };
+
   const analyzeScreenshots = async () => {
     const entries = Object.entries(scanFiles).filter(([,file])=>file);
     if (!entries.length) { flash("スクリーンショットを1枚以上選んでください"); return; }
-    setScanBusy(true); setScanProgress(0); setScanLog("OCRを準備しています…");
+    setScanBusy(true); setScanProgress(3); setScanLog("画像をAI解析用に最適化しています…");
     try {
-      const Tesseract = await loadTesseract();
-      const texts = { ...scanText };
+      const images = [];
       for (let i=0;i<entries.length;i++) {
         const [type,file] = entries[i];
-        setScanLog(`${SCAN_TYPES.find((x)=>x[0]===type)?.[1]}を読み取り中…`);
-        const result = await Tesseract.recognize(file, "jpn+eng", {
-          logger: (m) => {
-            if (m.status === "recognizing text") {
-              const overall = ((i + (m.progress || 0)) / entries.length) * 100;
-              setScanProgress(Math.round(overall));
-            }
-          }
-        });
-        texts[type] = result?.data?.text || "";
+        setScanLog(`${SCAN_TYPES.find((x)=>x[0]===type)?.[1]}を準備中…`);
+        images.push({ type, dataUrl: await imageToDataUrl(file) });
+        setScanProgress(Math.round(10 + ((i + 1) / entries.length) * 25));
       }
-      setScanText(texts);
-      let next = horses.map((h)=>({ ...h }));
-      if (texts.race) next = parseRaceText(texts.race, next);
-      if (texts.standard) next = parseIndexText(texts.standard, next, false);
-      if (texts.recent) next = parseIndexText(texts.recent, next, true);
-      if (texts.pace) parsePaceText(texts.pace);
-      if (texts.comment) next = parseCommentText(texts.comment, next);
-      setHorses(next);
-      setScanProgress(100); setScanLog(`${next.length}頭を反映しました。表で読み違いだけ修正してください。`);
-      flash("スクショ解析が完了しました");
-    } catch (e) {
-      setScanLog(`解析に失敗しました: ${e?.message || "通信状態を確認してください"}`);
-      flash("スクショ解析に失敗しました");
+      setScanLog("AIが表の行・列を解析しています…");
+      setScanProgress(45);
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ images })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "AI解析に失敗しました");
+      const count = applyAiResult(data);
+      setScanProgress(100);
+      setScanLog(`${count}頭をAIで反映しました。読み違いだけ表で修正してください。`);
+      flash("AI画像解析が完了しました");
+    } catch (aiError) {
+      console.warn("AI analysis failed; falling back to OCR", aiError);
+      try {
+        const count = await analyzeWithOcrFallback(entries);
+        setScanProgress(100);
+        setScanLog(`AI解析エラー: ${aiError?.message || "不明"}。OCRで${count}頭を反映しました。`);
+        flash("AI解析に失敗したためOCRで処理しました");
+      } catch (ocrError) {
+        setScanLog(`解析に失敗しました: ${aiError?.message || ocrError?.message || "通信状態を確認してください"}`);
+        flash("スクショ解析に失敗しました");
+      }
     } finally { setScanBusy(false); }
   };
 
@@ -803,10 +880,10 @@ export default function JRAPredictionTool() {
             </label>)}
           </div>
           <div className="flex items-center gap-3 mt-3">
-            <button disabled={scanBusy} onClick={analyzeScreenshots} className="bg-blue-700 disabled:bg-gray-400 text-white text-sm font-black px-4 py-2.5 rounded-lg shadow">{scanBusy ? "解析中…" : "画像を解析して自動入力"}</button>
+            <button disabled={scanBusy} onClick={analyzeScreenshots} className="bg-blue-700 disabled:bg-gray-400 text-white text-sm font-black px-4 py-2.5 rounded-lg shadow">{scanBusy ? "解析中…" : "AIで画像を解析して自動入力"}</button>
             <div className="flex-1">
               <div className="h-2 bg-gray-200 rounded overflow-hidden"><div className="h-full bg-blue-600 transition-all" style={{width:`${scanProgress}%`}}/></div>
-              <div className="text-[10px] text-gray-500 mt-1">{scanLog || "画像は端末内だけで選択され、解析時にOCR処理されます。"}</div>
+              <div className="text-[10px] text-gray-500 mt-1">{scanLog || "画像はVercelの保護されたAPI経由でAI解析されます。APIキーはブラウザに公開されません。"}</div>
             </div>
           </div>
           <details className="mt-2"><summary className="text-[10px] text-gray-400 cursor-pointer">OCR原文を確認・修正</summary>
