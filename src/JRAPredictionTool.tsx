@@ -776,7 +776,7 @@ export default function JRAPredictionTool() {
     next = next.filter((h)=>h.name || h.best || h.start || h.oikake || h.agari || h.comment || h.odds || h.jockey)
       .sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
     setHorses(next);
-    return next.filter((h)=>h.name).length;
+    return next.filter((h)=>h.name && h.name !== "馬名").length;
   };
 
   const fileToCompressedDataUrl = async (file) => {
@@ -826,14 +826,26 @@ export default function JRAPredictionTool() {
     return best;
   };
 
-  const azureRowHorseNumber = (row) => {
-    for (let c = 0; c < Math.min(3, row.length); c++) {
-      const t = azureCell(row[c]);
-      if (/^(?:[1-9]|1\d|20)$/.test(t)) return t;
-      const m = t.match(/^(?:枠)?\s*([1-9]|1\d|20)(?:\s|$)/);
-      if (m) return m[1];
-    }
+  const azureLeadingHorseNumber = (value) => {
+    const text = azureCell(value)
+      .replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (ch) => String("①②③④⑤⑥⑦⑧⑨⑩".indexOf(ch) + 1))
+      .replace(/^[枠馬番\s:：-]+/, "")
+      .trim();
+    const exact = text.match(/^(?:0?)([1-9]|1\d|20)$/);
+    if (exact) return exact[1];
+    // 「1 1 セイリュウ」「10 エストレアボニータ」のような結合セルにも対応
+    const lead = text.match(/^([1-9]|1\d|20)(?:\s+([1-9]|1\d|20))?(?=\s|[ァ-ヶーA-Za-z])/);
+    if (lead) return lead[2] || lead[1];
     return "";
+  };
+
+  const azureRowHorseNumber = (row) => {
+    for (let c = 0; c < Math.min(6, row.length); c++) {
+      const n = azureLeadingHorseNumber(row[c]);
+      if (n) return n;
+    }
+    const joined = row.slice(0, 6).map(azureCell).join(" ");
+    return azureLeadingHorseNumber(joined);
   };
 
 
@@ -852,8 +864,9 @@ export default function JRAPredictionTool() {
     const lines = azureSpatialLines(payload);
     const medianHeight = azureMedian(lines.map((line) => Number(line.height || 0)));
     const anchors = lines
-      .filter((line) => /^(?:[1-9]|1\d|20)$/.test(line.content) && Number(line.centerX) < 0.18 && Number(line.centerY) > 0.18)
-      .map((line) => ({ n: Number(line.content), y: Number(line.centerY), x: Number(line.centerX) }))
+      .map((line) => ({ line, n: azureLeadingHorseNumber(line.content) }))
+      .filter((item) => item.n && Number(item.line.centerX) < 0.34 && Number(item.line.centerY) > 0.14)
+      .map((item) => ({ n: Number(item.n), y: Number(item.line.centerY), x: Number(item.line.centerX) }))
       .sort((a, b) => a.y - b.y);
     const unique = [];
     for (const anchor of anchors) {
@@ -974,6 +987,42 @@ export default function JRAPredictionTool() {
     return list;
   };
 
+  const azureNameCandidates = (value) => {
+    const text = azureCell(value)
+      .replace(/[◎○▲△☆◇●◉◯]/g, " ")
+      .replace(/(?:牡|牝|セ)\s*\d{1,2}/g, " ")
+      .replace(/\d+(?:\.\d+)?/g, " ");
+    return (text.match(/[ァ-ヶー]{3,24}/g) || [])
+      .filter((name) => !/^(タイム指数|スタート指数|追走指数|上がり指数|タイム予測|ポジション|コメント|オッズ|データ分析|レース結果|出馬表|馬名|騎手|斤量|人気)$/.test(name));
+  };
+
+  const mergeAzureGenericTextRows = (payload, baseList) => {
+    const list = baseList.map((h) => ({ ...h }));
+    const lines = azureSpatialLines(payload);
+    for (const line of lines) {
+      const umaban = azureLeadingHorseNumber(line.content);
+      if (!umaban) continue;
+      const names = azureNameCandidates(line.content).sort((a, b) => b.length - a.length);
+      if (!names.length) continue;
+      let h = list.find((x) => String(x.umaban) === String(umaban));
+      if (!h) { h = { ...emptyHorse(), umaban: String(umaban) }; list.push(h); }
+      if (!h.name || h.name === "馬名") h.name = names[0];
+    }
+    // Azureが行を分割した場合は、馬番アンカーの直後にある馬名候補を縦位置で割り当てる
+    const bands = azureRowBands(payload);
+    for (const row of bands) {
+      let h = list.find((x) => String(x.umaban) === row.umaban);
+      if (!h) { h = { ...emptyHorse(), umaban: row.umaban }; list.push(h); }
+      if (h.name && h.name !== "馬名") continue;
+      const candidates = row.lines
+        .filter((line) => Number(line.centerX) > 0.10 && Number(line.centerX) < 0.70)
+        .flatMap((line) => azureNameCandidates(line.content))
+        .sort((a, b) => b.length - a.length);
+      if (candidates[0]) h.name = candidates[0];
+    }
+    return list;
+  };
+
   const pickAzureTable = (tables, type) => {
     const scored = (tables || []).map((table) => {
       const rows = table?.rows || [];
@@ -992,7 +1041,7 @@ export default function JRAPredictionTool() {
 
   const mergeAzureRaceTable = (payload, baseList) => {
     const table = pickAzureTable(payload.tables, "race");
-    if (!table) return mergeAzureRaceSpatial(payload, baseList);
+    if (!table) return mergeAzureGenericTextRows(payload, mergeAzureRaceSpatial(payload, baseList));
     const rows = table.rows || [];
     const nameCol = azureHeaderIndex(rows, ["馬名"]);
     const jockeyCol = azureHeaderIndex(rows, ["騎手"]);
@@ -1032,7 +1081,8 @@ export default function JRAPredictionTool() {
       }
     });
     const spatial = mergeAzureRaceSpatial(payload, list);
-    return spatial.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
+    const generic = mergeAzureGenericTextRows(payload, spatial);
+    return generic.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
   };
 
   const mergeAzureIndexTable = (payload, baseList, recentMode) => {
@@ -1133,7 +1183,7 @@ export default function JRAPredictionTool() {
       .filter((h)=>h.name || h.best || h.start || h.oikake || h.agari || h.comment || h.odds || h.jockey)
       .sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
     setHorses(next);
-    return next.filter((h)=>h.name).length;
+    return next.filter((h)=>h.name && h.name !== "馬名").length;
   };
 
   const analyzeScreenshots = async () => {
