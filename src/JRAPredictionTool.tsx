@@ -1174,6 +1174,11 @@ export default function JRAPredictionTool() {
       }
       payloads[type] = payload;
       texts[type] = payload.text || "";
+      // F0無料枠で連続リクエストが集中しないよう、画像間に少し間隔を空ける。
+      if (i < entries.length - 1) {
+        setScanLog(`${label}の解析完了。次の画像まで待機中…`);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
     }
     setScanText(texts);
     setAzureDebug(payloads);
