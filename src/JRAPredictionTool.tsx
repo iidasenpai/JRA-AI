@@ -483,54 +483,77 @@ export default function JRAPredictionTool() {
   };
 
   const bestHorseName = (text) => {
-    const stop = new Set(["出馬表","タイム指数","近走成績","単勝オッズ","人気","騎手","斤量","馬名","全体","スタート","追走","上がり"]);
-    const words = normalizeOcr(text).match(/[ァ-ヶー]{4,20}/g) || [];
+    const stop = new Set(["出馬表","タイム指数","近走成績","単勝オッズ","人気","騎手","斤量","馬名","全体","スタート","追走","上がり","コメント","厩舎"]);
+    const normalized = normalizeOcr(text)
+      .replace(/[○◎△▲☆◇□■●]/g, " ")
+      .replace(/\d+(?:\.\d+)?/g, " ")
+      .replace(/[一-龠]{1,4}(?:師|騎手|調教師)/g, " ");
+    const words = normalized.match(/[ァ-ヶー]{4,20}/g) || [];
+    const badFragments = ["サンクス", "ソングス", "グツグツ"];
     return words
       .map((x)=>x.replace(/^[ー]+|[ー]+$/g,""))
-      .filter((x)=>x.length>=4 && !stop.has(x))
+      .filter((x)=>x.length>=4 && !stop.has(x) && !badFragments.includes(x))
       .sort((a,b)=>b.length-a.length)[0] || "";
   };
 
   const rowLayout = (type, img) => {
     const h=img.height, w=img.width;
-    if (type === "race") return { x:0.02*w, y:0.275*h, width:0.96*w, height:0.715*h };
-    if (type === "standard") return { x:0.01*w, y:0.285*h, width:0.98*w, height:0.705*h };
-    if (type === "recent") return { x:0.01*w, y:0.285*h, width:0.98*w, height:0.705*h };
-    if (type === "comment") return { x:0.01*w, y:0.31*h, width:0.98*w, height:0.68*h };
+    if (type === "race") return { x:0.01*w, y:0.278*h, width:0.98*w, height:0.708*h };
+    if (type === "standard") return { x:0.01*w, y:0.294*h, width:0.98*w, height:0.696*h };
+    if (type === "recent") return { x:0.01*w, y:0.294*h, width:0.98*w, height:0.696*h };
     return { x:0, y:0, width:w, height:h };
+  };
+
+  const nameColumnLayout = (type, img) => {
+    const w=img.width;
+    // 対応画面ごとの「馬名列」だけを切り出す。騎手・斤量・コメントは混ぜない。
+    if (type === "race") return { x:0.17*w, width:0.48*w };
+    if (type === "standard") return { x:0.075*w, width:0.255*w };
+    if (type === "recent") return { x:0.09*w, width:0.23*w };
+    return { x:0, width:0 };
   };
 
   const recognizeHorseRows = async (Tesseract, file, type, baseList, progressBase, progressSpan) => {
     const img = await fileToImage(file);
     const layout = rowLayout(type, img);
+    const nameLayout = nameColumnLayout(type, img);
     const list = baseList.length ? baseList.map((h)=>({...h})) : Array.from({length:11},(_,i)=>({...emptyHorse(),umaban:String(i+1)}));
     const rows = 11;
     const rowH = layout.height / rows;
     for (let i=0;i<rows;i++) {
       setScanLog(`${SCAN_TYPES.find((x)=>x[0]===type)?.[1] || type}：${i+1}番を解析中…`);
       const pad = rowH * 0.06;
-      const canvas = cropCanvas(img, layout.x, layout.y + i*rowH + pad, layout.width, rowH-pad*2, type === "comment" ? 1.8 : 2.35);
-      const result = await Tesseract.recognize(canvas, "jpn+eng", {
-        tessedit_pageseg_mode: type === "comment" ? "6" : "7",
+      const rowY = layout.y + i*rowH + pad;
+      const rowCanvas = cropCanvas(img, layout.x, rowY, layout.width, rowH-pad*2, 2.25);
+      const rowResult = await Tesseract.recognize(rowCanvas, "jpn+eng", {
+        tessedit_pageseg_mode: "7",
         preserve_interword_spaces: "1",
-        logger:(m)=>{ if(m.status==="recognizing text") setScanProgress(Math.round(progressBase + ((i+(m.progress||0))/rows)*progressSpan)); }
+        logger:(m)=>{ if(m.status==="recognizing text") setScanProgress(Math.round(progressBase + ((i+(m.progress||0)*0.65)/rows)*progressSpan)); }
       });
-      const raw = normalizeOcr(result?.data?.text || "").replace(/\n+/g," ").trim();
+      const raw = normalizeOcr(rowResult?.data?.text || "").replace(/\n+/g," ").trim();
       let h = list.find((x)=>String(x.umaban)===String(i+1));
       if (!h) { h={...emptyHorse(),umaban:String(i+1)}; list.push(h); }
-      const name = bestHorseName(raw);
-      if (name) h.name=name;
+
+      // 馬名は専用の狭い列だけを別OCR。既に出馬表で確定済みなら指数画像では上書きしない。
+      if ((type === "race" || !h.name) && nameLayout.width > 0) {
+        const nameCanvas = cropCanvas(img, nameLayout.x, rowY, nameLayout.width, rowH-pad*2, 3.0);
+        const nameResult = await Tesseract.recognize(nameCanvas, "jpn", {
+          tessedit_pageseg_mode: "7",
+          preserve_interword_spaces: "1",
+          logger:(m)=>{ if(m.status==="recognizing text") setScanProgress(Math.round(progressBase + ((i+0.65+(m.progress||0)*0.35)/rows)*progressSpan)); }
+        });
+        const candidate = bestHorseName(nameResult?.data?.text || "");
+        if (candidate) h.name=candidate;
+      }
+
       if (type === "race") {
         const sex=raw.match(/(牡|牝|セ)\s*(\d{1,2})/); if(sex) h.sex=`${sex[1]}${sex[2]}`;
-        const nums=(raw.match(/\d{1,3}(?:\.\d)?/g)||[]).map(Number);
         const oddsPop=raw.match(/(\d{1,3}(?:\.\d)?)\s*(?:倍)?\s*(\d{1,2})\s*人気/);
         if(oddsPop){h.odds=oddsPop[1];h.ninki=oddsPop[2];}
-        else {
-          const plausibleOdds=nums.filter(n=>n>=1.0&&n<=999).slice(-2);
-          if(plausibleOdds.length>=2){h.odds=String(plausibleOdds[plausibleOdds.length-2]);h.ninki=String(Math.round(plausibleOdds[plausibleOdds.length-1]));}
-        }
-        const weight=raw.match(/(?:△|▲|☆|◇)?\s*([45]\d(?:\.\d)?)/); if(weight) h.weight=weight[1];
-        const jockey=raw.match(/([一-龠]{2,5}|[ァ-ヶー]{2,8})\s*(?:△|▲|☆|◇)?\s*[45]\d(?:\.\d)?/); if(jockey && jockey[1]!==name) h.jockey=jockey[1];
+        const weightMatches=[...(raw.matchAll(/(?:^|\s)([45]\d(?:\.\d)?)(?=\s|$)/g))];
+        if(weightMatches.length) h.weight=weightMatches[weightMatches.length-1][1];
+        const jockey=raw.match(/([一-龠]{2,5}|[ァ-ヶー]{2,8})\s*(?:△|▲|☆|◇)?\s*[45]\d(?:\.\d)?/);
+        if(jockey && jockey[1]!==h.name && !/^(牡|牝|人気|馬名)$/.test(jockey[1])) h.jockey=jockey[1];
       } else if (type === "standard") {
         const vals=(raw.match(/(?<![\d.])-?\d{1,3}(?:\.\d)?\*?/g)||[]).map(v=>v.replace("*","")).filter(v=>Number(v)>=20&&Number(v)<=140);
         if(vals.length>=4){h.best=vals[0];h.start=vals[1];h.oikake=vals[2];h.agari=vals[3];}
@@ -539,14 +562,36 @@ export default function JRAPredictionTool() {
         if(vals.length>=7) h.course=vals[6];
       } else if (type === "recent") {
         const vals=(raw.match(/(?<![\d.])-?\d{1,3}(?:\.\d)?\*?/g)||[]).map(v=>v.replace("*","")).filter(v=>Number(v)>=20&&Number(v)<=140);
-        if(vals.length){h.avg5=vals[0];}
+        if(vals.length) h.avg5=vals[0];
         if(vals.length>=4){h.r3=vals[vals.length-3];h.r2=vals[vals.length-2];h.r1=vals[vals.length-1];}
-      } else if (type === "comment") {
-        const cleaned = raw.replace(/^\d{1,2}\s*/,"").replace(name,"").trim();
-        if(cleaned.length>=6){h.comment=cleaned;h.condition=String(commentScore(cleaned));}
       }
     }
     return list.sort((a,b)=>Number(a.umaban)-Number(b.umaban));
+  };
+
+  const assignCommentsByKnownNames = (text, baseList) => {
+    const normalized = normalizeOcr(text);
+    const list = baseList.map((h)=>({...h}));
+    const found = list
+      .filter((h)=>h.name && h.name.length>=4)
+      .map((h)=>({ h, pos: normalized.indexOf(h.name) }))
+      .filter((x)=>x.pos>=0)
+      .sort((a,b)=>a.pos-b.pos);
+    found.forEach((item, idx)=>{
+      const end = idx+1<found.length ? found[idx+1].pos : normalized.length;
+      let block = normalized.slice(item.pos + item.h.name.length, end)
+        .replace(/^\s*[【\[].*?[】\]]\s*/, "")
+        .replace(/^\s*(?:○|◎|△|▲|☆|◇)+\s*/, "")
+        .trim();
+      if (block.length > 240) block = block.slice(0,240);
+      if (block.length>=6) {
+        item.h.comment=block;
+        item.h.condition=String(commentScore(block));
+        if (/距離短縮.*(?:期待|合う|プラス)|短縮.*好材料/.test(block)) item.h.classFit=String(Math.max(num(item.h.classFit)||50,56));
+        if (/芝.*(?:合う|問題ない)|ダート.*(?:合う|問題ない)/.test(block)) item.h.groundFit=String(Math.max(num(item.h.groundFit)||50,56));
+      }
+    });
+    return list;
   };
 
   const combineOcrTexts = (a, b) => {
@@ -634,13 +679,14 @@ export default function JRAPredictionTool() {
     // 全画面OCRのゴミ文字を馬名として採用しない。
     const selected = Object.fromEntries(entries);
     let rowStep = 0;
-    const rowTypes = ["race","standard","recent","comment"].filter((t)=>selected[t]);
+    const rowTypes = ["race","standard","recent"].filter((t)=>selected[t]);
     const span = rowTypes.length ? 72 / rowTypes.length : 0;
     for (const t of rowTypes) {
       next = await recognizeHorseRows(Tesseract, selected[t], t, next, 24 + rowStep*span, span);
       rowStep++;
     }
     if (texts.pace) parsePaceText(texts.pace);
+    if (texts.comment) next = assignCommentsByKnownNames(texts.comment, next);
     // 行解析で空欄の項目だけ、全画面OCR結果から補う。
     if (texts.race) {
       const loose = parseRaceText(texts.race, next);
