@@ -1466,7 +1466,7 @@ export default function JRAPredictionTool() {
     });
   }, [computed]);
 
-  const currentRaceSnapshot = (id = crypto.randomUUID(), previous: any = {}): any => ({
+  const currentRaceSnapshot = (id: string = crypto.randomUUID(), previous: any = {}): any => ({
     ...previous,
     id,
     title: raceName.trim() || `${track} ${surface}${distance || ""}m ${raceClass}`.trim(),
