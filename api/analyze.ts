@@ -1,7 +1,5 @@
 type VercelRequest = { method?: string; body?: any };
 type VercelResponse = { status: (code: number) => VercelResponse; json: (body: any) => any };
-declare const process: { env: Record<string, string | undefined> };
-declare const Buffer: { from: (data: string, encoding: "base64") => Uint8Array };
 
 const API_VERSION = "2024-11-30";
 const MODEL_ID = "prebuilt-layout";
@@ -55,8 +53,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: "POSTのみ対応しています" });
   }
 
-  const endpoint = String(process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT ?? "").replace(/\/$/, "");
-  const key = process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY;
+  const env = ((globalThis as any).process?.env ?? {}) as Record<string, string | undefined>;
+  const endpoint = String(env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT ?? "").replace(/\/$/, "");
+  const key = env.AZURE_DOCUMENT_INTELLIGENCE_KEY;
 
   if (!endpoint || !key) {
     return res.status(500).json({ error: "VercelのAzure環境変数が未設定です" });
@@ -76,7 +75,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const meta = image.slice(0, comma);
     const base64 = image.slice(comma + 1);
     const contentType = meta.match(/^data:([^;]+)/)?.[1] ?? "image/jpeg";
-    const bytes = Buffer.from(base64, "base64");
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
 
     const analyzeUrl = `${endpoint}/documentintelligence/documentModels/${MODEL_ID}:analyze?api-version=${API_VERSION}&outputContentFormat=text`;
     const start = await fetch(analyzeUrl, {
