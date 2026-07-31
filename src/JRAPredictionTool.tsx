@@ -462,6 +462,93 @@ export default function JRAPredictionTool() {
     return canvas;
   };
 
+
+  const cropCanvas = (img, x, y, w, h, scale = 2.2) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(w * scale));
+    canvas.height = Math.max(1, Math.round(h * scale));
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) throw new Error("画像を切り出せませんでした");
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, x, y, w, h, 0, 0, canvas.width, canvas.height);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < data.data.length; i += 4) {
+      const r=data.data[i], g=data.data[i+1], b=data.data[i+2];
+      const gray = 0.299*r + 0.587*g + 0.114*b;
+      const v = gray < 218 ? Math.max(0, (gray - 95) * 1.72) : 255;
+      data.data[i]=data.data[i+1]=data.data[i+2]=v;
+    }
+    ctx.putImageData(data,0,0);
+    return canvas;
+  };
+
+  const bestHorseName = (text) => {
+    const stop = new Set(["出馬表","タイム指数","近走成績","単勝オッズ","人気","騎手","斤量","馬名","全体","スタート","追走","上がり"]);
+    const words = normalizeOcr(text).match(/[ァ-ヶー]{4,20}/g) || [];
+    return words
+      .map((x)=>x.replace(/^[ー]+|[ー]+$/g,""))
+      .filter((x)=>x.length>=4 && !stop.has(x))
+      .sort((a,b)=>b.length-a.length)[0] || "";
+  };
+
+  const rowLayout = (type, img) => {
+    const h=img.height, w=img.width;
+    if (type === "race") return { x:0.02*w, y:0.275*h, width:0.96*w, height:0.715*h };
+    if (type === "standard") return { x:0.01*w, y:0.285*h, width:0.98*w, height:0.705*h };
+    if (type === "recent") return { x:0.01*w, y:0.285*h, width:0.98*w, height:0.705*h };
+    if (type === "comment") return { x:0.01*w, y:0.31*h, width:0.98*w, height:0.68*h };
+    return { x:0, y:0, width:w, height:h };
+  };
+
+  const recognizeHorseRows = async (Tesseract, file, type, baseList, progressBase, progressSpan) => {
+    const img = await fileToImage(file);
+    const layout = rowLayout(type, img);
+    const list = baseList.length ? baseList.map((h)=>({...h})) : Array.from({length:11},(_,i)=>({...emptyHorse(),umaban:String(i+1)}));
+    const rows = 11;
+    const rowH = layout.height / rows;
+    for (let i=0;i<rows;i++) {
+      setScanLog(`${SCAN_TYPES.find((x)=>x[0]===type)?.[1] || type}：${i+1}番を解析中…`);
+      const pad = rowH * 0.06;
+      const canvas = cropCanvas(img, layout.x, layout.y + i*rowH + pad, layout.width, rowH-pad*2, type === "comment" ? 1.8 : 2.35);
+      const result = await Tesseract.recognize(canvas, "jpn+eng", {
+        tessedit_pageseg_mode: type === "comment" ? "6" : "7",
+        preserve_interword_spaces: "1",
+        logger:(m)=>{ if(m.status==="recognizing text") setScanProgress(Math.round(progressBase + ((i+(m.progress||0))/rows)*progressSpan)); }
+      });
+      const raw = normalizeOcr(result?.data?.text || "").replace(/\n+/g," ").trim();
+      let h = list.find((x)=>String(x.umaban)===String(i+1));
+      if (!h) { h={...emptyHorse(),umaban:String(i+1)}; list.push(h); }
+      const name = bestHorseName(raw);
+      if (name) h.name=name;
+      if (type === "race") {
+        const sex=raw.match(/(牡|牝|セ)\s*(\d{1,2})/); if(sex) h.sex=`${sex[1]}${sex[2]}`;
+        const nums=(raw.match(/\d{1,3}(?:\.\d)?/g)||[]).map(Number);
+        const oddsPop=raw.match(/(\d{1,3}(?:\.\d)?)\s*(?:倍)?\s*(\d{1,2})\s*人気/);
+        if(oddsPop){h.odds=oddsPop[1];h.ninki=oddsPop[2];}
+        else {
+          const plausibleOdds=nums.filter(n=>n>=1.0&&n<=999).slice(-2);
+          if(plausibleOdds.length>=2){h.odds=String(plausibleOdds[plausibleOdds.length-2]);h.ninki=String(Math.round(plausibleOdds[plausibleOdds.length-1]));}
+        }
+        const weight=raw.match(/(?:△|▲|☆|◇)?\s*([45]\d(?:\.\d)?)/); if(weight) h.weight=weight[1];
+        const jockey=raw.match(/([一-龠]{2,5}|[ァ-ヶー]{2,8})\s*(?:△|▲|☆|◇)?\s*[45]\d(?:\.\d)?/); if(jockey && jockey[1]!==name) h.jockey=jockey[1];
+      } else if (type === "standard") {
+        const vals=(raw.match(/(?<![\d.])-?\d{1,3}(?:\.\d)?\*?/g)||[]).map(v=>v.replace("*","")).filter(v=>Number(v)>=20&&Number(v)<=140);
+        if(vals.length>=4){h.best=vals[0];h.start=vals[1];h.oikake=vals[2];h.agari=vals[3];}
+        if(vals.length>=5) h.avg5=vals[4];
+        if(vals.length>=6) h.dist=vals[5];
+        if(vals.length>=7) h.course=vals[6];
+      } else if (type === "recent") {
+        const vals=(raw.match(/(?<![\d.])-?\d{1,3}(?:\.\d)?\*?/g)||[]).map(v=>v.replace("*","")).filter(v=>Number(v)>=20&&Number(v)<=140);
+        if(vals.length){h.avg5=vals[0];}
+        if(vals.length>=4){h.r3=vals[vals.length-3];h.r2=vals[vals.length-2];h.r1=vals[vals.length-1];}
+      } else if (type === "comment") {
+        const cleaned = raw.replace(/^\d{1,2}\s*/,"").replace(name,"").trim();
+        if(cleaned.length>=6){h.comment=cleaned;h.condition=String(commentScore(cleaned));}
+      }
+    }
+    return list.sort((a,b)=>Number(a.umaban)-Number(b.umaban));
+  };
+
   const combineOcrTexts = (a, b) => {
     const lines = [...normalizeOcr(a).split("\n"), ...normalizeOcr(b).split("\n")]
       .map((x) => x.trim()).filter(Boolean);
@@ -543,19 +630,26 @@ export default function JRAPredictionTool() {
     }
     setScanText(texts);
     let next = horses.map((h)=>({ ...h }));
-    if (texts.race) next = enrichRaceFromLooseText(texts.race, next);
-    if (texts.standard) next = parseIndexText(texts.standard, next, false);
-    if (texts.recent) next = parseIndexText(texts.recent, next, true);
+    // 対応サイトの表は11行に分割し、馬番を1〜11で固定して読む。
+    // 全画面OCRのゴミ文字を馬名として採用しない。
+    const selected = Object.fromEntries(entries);
+    let rowStep = 0;
+    const rowTypes = ["race","standard","recent","comment"].filter((t)=>selected[t]);
+    const span = rowTypes.length ? 72 / rowTypes.length : 0;
+    for (const t of rowTypes) {
+      next = await recognizeHorseRows(Tesseract, selected[t], t, next, 24 + rowStep*span, span);
+      rowStep++;
+    }
     if (texts.pace) parsePaceText(texts.pace);
-    if (texts.comment) next = parseCommentText(texts.comment, next);
-    // 出馬表以外から馬名が拾えた場合も不足分を補完する。
-    if (next.length < 2) {
-      const allNames = extractHorseCandidates(Object.values(texts).join("\n"));
-      allNames.filter((n)=>/^[ァ-ヶーA-Za-z]{4,18}$/.test(n)).slice(0,18).forEach((name,i)=>{
-        if (!findHorse(name,next)) next.push({...emptyHorse(),umaban:String(next.length+1),name});
+    // 行解析で空欄の項目だけ、全画面OCR結果から補う。
+    if (texts.race) {
+      const loose = parseRaceText(texts.race, next);
+      next = next.map((h)=>{
+        const x=loose.find((v)=>String(v.umaban)===String(h.umaban));
+        return x ? {...x,...Object.fromEntries(Object.entries(h).filter(([,v])=>v!==""))} : h;
       });
     }
-    next = next.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
+    next = next.filter((h)=>h.name || h.best || h.comment).sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
     setHorses(next);
     return next.filter((h)=>h.name).length;
   };
