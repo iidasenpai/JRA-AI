@@ -779,14 +779,67 @@ export default function JRAPredictionTool() {
     return next.filter((h)=>h.name).length;
   };
 
+  const fileToCompressedDataUrl = async (file) => {
+    const img = await fileToImage(file);
+    const maxSide = 2200;
+    const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.9);
+  };
+
+  const analyzeWithAzure = async (entries) => {
+    const texts = { ...scanText };
+    for (let i = 0; i < entries.length; i++) {
+      const [type, file] = entries[i];
+      const label = SCAN_TYPES.find((x)=>x[0]===type)?.[1] || type;
+      setScanLog(`${label}をAzure Document Intelligenceで解析中…`);
+      setScanProgress(Math.round((i / entries.length) * 90) + 2);
+      const image = await fileToCompressedDataUrl(file);
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image, type }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error || `${label}の解析に失敗しました`);
+      texts[type] = payload.text || "";
+    }
+    setScanText(texts);
+
+    let next = horses.map((h)=>({ ...h }));
+    if (texts.race) next = enrichRaceFromLooseText(texts.race, next);
+    if (texts.standard) next = parseIndexText(texts.standard, next, false);
+    if (texts.recent) next = parseIndexText(texts.recent, next, true);
+    if (texts.pace) parsePaceText(texts.pace);
+    if (texts.comment) next = parseCommentText(texts.comment, next);
+
+    next = next
+      .filter((h)=>h.name || h.best || h.start || h.oikake || h.agari || h.comment || h.odds || h.jockey)
+      .sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
+    setHorses(next);
+    return next.filter((h)=>h.name).length;
+  };
+
   const analyzeScreenshots = async () => {
     const entries = Object.entries(scanFiles).filter(([,file])=>file);
     if (!entries.length) { flash("スクリーンショットを1枚以上選んでください"); return; }
-    setScanBusy(true); setScanProgress(1); setScanLog("端末内OCRを準備しています…");
+    setScanBusy(true); setScanProgress(1); setScanLog("Azure解析を準備しています…");
     try {
-      const count = await analyzeWithLocalOcr(entries);
+      let count;
+      try {
+        count = await analyzeWithAzure(entries);
+        setScanLog(`${count}頭をAzure OCRで反映しました。読み違いだけ表で修正してください。`);
+      } catch (azureError) {
+        console.warn("Azure OCR failed; falling back to local OCR", azureError);
+        setScanLog(`Azure解析に失敗したため端末内OCRへ切り替えます：${azureError?.message || "設定を確認してください"}`);
+        count = await analyzeWithLocalOcr(entries);
+        setScanLog(`${count}頭を端末内OCRで反映しました。Azure設定も確認してください。`);
+      }
       setScanProgress(100);
-      setScanLog(`${count}頭を端末内OCRで反映しました。読み違いだけ表で修正してください。`);
       flash("スクショ解析が完了しました");
     } catch (error) {
       console.error(error);
@@ -1145,7 +1198,7 @@ export default function JRAPredictionTool() {
             <button disabled={scanBusy} onClick={analyzeScreenshots} className="bg-blue-700 disabled:bg-gray-400 text-white text-sm font-black px-4 py-2.5 rounded-lg shadow">{scanBusy ? "解析中…" : "画像を解析して自動入力"}</button>
             <div className="flex-1">
               <div className="h-2 bg-gray-200 rounded overflow-hidden"><div className="h-full bg-blue-600 transition-all" style={{width:`${scanProgress}%`}}/></div>
-              <div className="text-[10px] text-gray-500 mt-1">{scanLog || "画像はVercelの保護されたAPI経由でAI解析されます。APIキーはブラウザに公開されません。"}</div>
+              <div className="text-[10px] text-gray-500 mt-1">{scanLog || "Azure Document Intelligenceを優先し、失敗時のみ端末内OCRへ切り替えます。キーはブラウザへ公開されません。"}</div>
             </div>
           </div>
           <details className="mt-2"><summary className="text-[10px] text-gray-400 cursor-pointer">OCR原文を確認・修正</summary>
