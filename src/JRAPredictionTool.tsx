@@ -849,6 +849,17 @@ export default function JRAPredictionTool() {
     return raw;
   };
 
+  const cleanJockeyName = (value, horseName = "") => {
+    const raw = azureCell(value).replace(/[△▲☆◇◎○]/g, "").replace(/\s+/g, "").trim();
+    if (!raw || /^(馬名|騎手|斤量|人気|オッズ|牡|牝|セ)$/.test(raw)) return "";
+    // 馬名の先頭数文字を騎手欄として誤認したケースを除外
+    if (horseName && (horseName.startsWith(raw) || raw.startsWith(horseName))) return "";
+    // 国内騎手名は通常、漢字を含む。純カタカナは馬名断片の可能性が高いので除外
+    if (!/[一-龠々]/.test(raw)) return "";
+    const m = raw.match(/[一-龠々]{1,5}(?:[ぁ-ん]{0,3}|[一-龠々]{0,4})/);
+    return m?.[0] || "";
+  };
+
   const nameFromComment = (comment) => {
     const text = String(comment || "").replace(/[\s・･]/g, "");
     const beforeStable = text.split(/[【\[]/)[0] || "";
@@ -867,6 +878,12 @@ export default function JRAPredictionTool() {
     h.ninki = Number.isInteger(pop) && pop >= 1 && pop <= 20 ? String(pop) : "";
     const odds = Number(String(h.odds ?? "").trim());
     h.odds = Number.isFinite(odds) && odds > 0 && odds < 10000 ? String(odds) : "";
+    h.jockey = cleanJockeyName(h.jockey, h.name) || "";
+    // 距離・コース指数は専用列から確実に取れた値だけ残す。主要指数の複製は除外。
+    for (const key of ["dist", "course"]) {
+      const v = String(h[key] ?? "").trim();
+      if (!/^\d{1,3}$/.test(v) || [h.best, h.start, h.oikake, h.agari, h.avg5].includes(v)) h[key] = "";
+    }
     return h;
   };
 
@@ -990,10 +1007,7 @@ export default function JRAPredictionTool() {
       if (sex) h.sex = `${sex[1]}${sex[2]}`;
       const weight = nearestSpatialValue(row, headers.weight, (v) => azureNumber(v, 45, 65), 0.12) || (row.text.match(/(?:牡|牝|セ)\s*\d{1,2}.*?([45]\d(?:\.\d)?)/)?.[1] || "");
       if (!h.weight && weight) h.weight = weight;
-      const jockey = nearestSpatialValue(row, headers.jockey, (v) => {
-        const m = azureCell(v).replace(/[△▲☆◇]/g, "").match(/[ァ-ヶー一-龠]{2,8}/);
-        return m && !/^(馬名|騎手|斤量|人気)$/.test(m[0]) ? m[0] : "";
-      }, 0.17);
+      const jockey = nearestSpatialValue(row, headers.jockey, (v) => cleanJockeyName(v, h.name), 0.17);
       if (!h.jockey && jockey) h.jockey = jockey;
       const odds = nearestSpatialValue(row, headers.odds, (v) => azureNumber(v, 1, 9999), 0.12);
       if (!h.odds && odds) h.odds = odds;
@@ -1019,7 +1033,7 @@ export default function JRAPredictionTool() {
       }
       const assign = (key, center) => {
         if (h[key] !== "" && h[key] !== null && h[key] !== undefined) return;
-        const value = nearestSpatialValue(row, center, (v) => azureNumber(v.replace(/\*/g, ""), 0, 140), 0.085);
+        const value = nearestSpatialValue(row, center, (v) => azureInteger(v.replace(/\*/g, ""), 20, 120), 0.075);
         if (value) h[key] = value;
       };
       assign("best", headers.overall); assign("start", headers.start); assign("oikake", headers.chase); assign("agari", headers.finish);
@@ -1032,7 +1046,7 @@ export default function JRAPredictionTool() {
       if (!h.best || !h.start || !h.oikake || !h.agari) {
         const numeric = row.lines
           .filter((line) => Number(line.centerX) > 0.24)
-          .map((line) => azureNumber(line.content.replace(/\*/g, ""), 0, 140))
+          .map((line) => azureInteger(line.content.replace(/\*/g, ""), 20, 120))
           .filter(Boolean);
         if (!recentMode && numeric.length >= 4) {
           if (!h.best) h.best = numeric[0]; if (!h.start) h.start = numeric[1]; if (!h.oikake) h.oikake = numeric[2]; if (!h.agari) h.agari = numeric[3];
@@ -1142,16 +1156,19 @@ export default function JRAPredictionTool() {
       const weight = weightCol >= 0 ? azureNumber(row[weightCol], 45, 65) : "";
       if (weight) h.weight = weight;
       if (jockeyCol >= 0) {
-        const jm = azureCell(row[jockeyCol]).replace(/[△▲☆◇]/g, "").match(/[ァ-ヶー一-龠]{2,8}/);
-        if (jm && !/^(馬名|騎手|牡|牝)$/.test(jm[0])) h.jockey = jm[0];
+        const jockey = cleanJockeyName(row[jockeyCol], h.name);
+        if (jockey) h.jockey = jockey;
       }
-      const odds = oddsCol >= 0 ? azureNumber(row[oddsCol], 1, 9999) : "";
-      if (odds) h.odds = odds;
-      const pop = popCol >= 0 ? azureInteger(row[popCol], 1, 20) : "";
-      if (pop) h.ninki = pop;
-      if (!h.odds || !h.ninki) {
-        const op = rowText.match(/(\d{1,3}(?:\.\d+)?)\s*(\d{1,2})\s*人気/);
-        if (op) { if (!h.odds) h.odds = op[1]; if (!h.ninki) h.ninki = op[2]; }
+      // 「6.5 4人気」のような明示表記を最優先し、オッズと人気の列ずれを防ぐ
+      const op = rowText.match(/(\d{1,3}(?:\.\d+)?)\s*(\d{1,2})\s*人気/);
+      if (op) {
+        h.odds = op[1];
+        h.ninki = op[2];
+      } else {
+        const odds = oddsCol >= 0 ? azureNumber(row[oddsCol], 1, 9999) : "";
+        if (odds) h.odds = odds;
+        const pop = popCol >= 0 ? azureInteger(row[popCol], 1, 20) : "";
+        if (pop) h.ninki = pop;
       }
     });
     const spatial = mergeAzureRaceSpatial(payload, list);
@@ -1201,8 +1218,9 @@ export default function JRAPredictionTool() {
       }
       // 距離・コース指数は結合セル誤認識が多いため、確実な専用入力がある時だけ手動補完する。
     });
-    const spatial = mergeAzureIndexSpatial(payload, list, recentMode);
-    return spatial.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
+    // 表認識に成功した場合はセル値を正とし、座標OCRで空欄を無理に埋めない。
+    // オッズ・人気・斤量を指数列へ誤配置する事故を防ぐ。
+    return list.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
   };
 
   const mergeAzureComments = (payload, baseList) => {
@@ -1257,7 +1275,8 @@ export default function JRAPredictionTool() {
     setAzureDebug(payloads);
     setAzureLastError("");
 
-    let next = horses.map((h)=>({ ...h }));
+    // 出馬表を含む新規解析では前回レースの値を持ち越さず、列ずれ・残存値を防ぐ。
+    let next = payloads.race ? [] : horses.map((h)=>({ ...h }));
     if (payloads.race) next = mergeAzureRaceTable(payloads.race, next);
     if (payloads.standard) next = mergeAzureIndexTable(payloads.standard, next, false);
     if (payloads.recent) next = mergeAzureIndexTable(payloads.recent, next, true);
