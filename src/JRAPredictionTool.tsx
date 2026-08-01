@@ -23,6 +23,32 @@ const RACE_CLASSES = ["新馬", "未勝利", "1勝", "2勝", "3勝", "OP", "L", 
 const RUNNING_STYLES = ["逃", "先", "差", "追"];
 const PACE_TYPES = ["S", "M", "H"];
 const TRAINING_SCORE = { S: 3.0, A: 2.0, B: 0.8, C: 0, D: -1.5 };
+const GRADE_TO_TRAINING_100 = { S: 92, A: 82, B: 70, C: 56, D: 40 };
+const MARK_ORDER = { "◎": 0, "○": 1, "▲": 2, "△": 3, "☆": 4, "": 9 };
+
+const scoreCommentText = (raw = "") => {
+  const text = String(raw);
+  let score = 55;
+  if (/^\s*◎/.test(text)) score += 13;
+  else if (/^\s*○/.test(text)) score += 7;
+  else if (/^\s*△/.test(text)) score -= 3;
+  else if (/^\s*[×✕]/.test(text)) score -= 10;
+  const positives = [
+    [/ここ目標|目標に順調|態勢は整|仕上がった|力を出し切れば/, 8],
+    [/好レース|楽しみ|期待|巻き返せる|見直し|押し切れ/, 5],
+    [/良くなって|良化|上向|順調|落ち着き|適性.*合|条件.*合/, 4],
+    [/距離短縮|距離延長|良馬場|減量騎手|自分の競馬/, 2],
+  ];
+  const negatives = [
+    [/様子見|使いつつ|どこまで|半信半疑|課題/, -6],
+    [/モタれ|出遅れ|気ムラ|忙しかった|馬場.*応え|折り合い.*鍵/, -3],
+    [/疲れ|状態ひと息|良化途上|まだ.*ない/, -5],
+  ];
+  positives.forEach(([re, pt]) => { if (re.test(text)) score += pt; });
+  negatives.forEach(([re, pt]) => { if (re.test(text)) score += pt; });
+  return Math.round(clamp(score, 25, 95));
+};
+
 const STYLE_PACE_SCORE = {
   S: { "逃": 2.2, "先": 1.4, "差": -0.4, "追": -1.2 },
   M: { "逃": 0.4, "先": 0.7, "差": 0.5, "追": 0.0 },
@@ -50,6 +76,8 @@ const emptyHorse = () => ({
   ninki: "",
   runningStyle: "先",
   training: "B",
+  trainingScore: "", // 調教100点
+  trainingNote: "",
   groundFit: "", // 馬場適性 0-100
   classFit: "", // クラス適性 0-100
   jockeyIndex: "", // 騎手指数 0-100
@@ -86,7 +114,7 @@ export default function JRAPredictionTool() {
   const [raceClass, setRaceClass] = useState("3勝");
   const [paceType, setPaceType] = useState("M");
   const [learningOn, setLearningOn] = useState(true);
-  const [learned, setLearned] = useState({ training: 1, pace: 1, ground: 1, classFit: 1, jockey: 1, gate: 1, body: 1, pedigree: 1, condition: 1 });
+  const [learned, setLearned] = useState({ training: 1, comment: 1, value: 1, pace: 1, ground: 1, classFit: 1, jockey: 1, gate: 1, body: 1, pedigree: 1, condition: 1 });
   const [historyCount, setHistoryCount] = useState(0);
   const [horses, setHorses] = useState([]);
   const [weights, setWeights] = useState({ best: 35, avg5: 20, dist: 25, course: 20 });
@@ -128,7 +156,7 @@ export default function JRAPredictionTool() {
           if (data.raceClass) setRaceClass(data.raceClass);
           if (data.paceType) setPaceType(data.paceType);
           if (data.learningOn !== undefined) setLearningOn(data.learningOn);
-          if (data.learned) setLearned(data.learned);
+          if (data.learned) setLearned((prev) => ({ ...prev, ...data.learned }));
           if (data.historyCount !== undefined) setHistoryCount(data.historyCount);
           if (data.horses) setHorses(data.horses);
           if (data.weights) setWeights(data.weights);
@@ -559,18 +587,34 @@ export default function JRAPredictionTool() {
       // 「連闘のため中間軽め」「攻め軽め」は悪化扱いにせず、評価の上振れだけ抑える。
       if (/連闘.*中間軽め|攻め軽め/.test(block.summary)) score = Math.min(score, 1);
 
-      if (score >= 5) return "S";
-      if (score >= 2) return "A";
-      if (score >= -1) return "B";
-      if (score >= -4) return "C";
-      return "D";
+      // 時計・追い方・併せ内容を100点へ反映
+      const times = [...all.matchAll(/(?:^|\s)(1[01]\.\d|12\.\d|13\.\d|14\.\d)(?=\s|$|［)/g)].map((m)=>Number(m[1]));
+      const lastF = times.length ? Math.min(...times) : null;
+      if (lastF !== null) {
+        if (lastF <= 11.3) score += 4;
+        else if (lastF <= 11.8) score += 3;
+        else if (lastF <= 12.3) score += 2;
+        else if (lastF >= 13.5) score -= 2;
+      }
+      if (/先着/.test(all)) score += 2;
+      if (/同入/.test(all)) score += 1;
+      if (/遅れ/.test(all)) score -= 3;
+      if (/馬なり余力/.test(all)) score += 1;
+      if (/一杯に追う|叩き一杯/.test(all) && lastF !== null && lastF >= 13.0) score -= 2;
+
+      const numeric = Math.round(clamp(70 + score * 4, 30, 97));
+      const grade = numeric >= 88 ? "S" : numeric >= 78 ? "A" : numeric >= 65 ? "B" : numeric >= 50 ? "C" : "D";
+      return { grade, numeric };
     };
 
     let applied = 0;
     for (const block of blocks) {
       const horse = list.find((h)=>String(h.umaban)===block.umaban) || findHorse(block.name, list);
       if (!horse) continue;
-      horse.training = scoreBlock(block);
+      const evaluated = scoreBlock(block);
+      horse.training = evaluated.grade;
+      horse.trainingScore = String(evaluated.numeric);
+      horse.trainingNote = `${block.summary}${block.arrow ? ` ${block.arrow}` : ""}`.trim();
       applied += 1;
     }
 
@@ -601,7 +645,7 @@ export default function JRAPredictionTool() {
             if (horse) break;
           }
         }
-        if (horse) horse.training = grade;
+        if (horse) { horse.training = grade; horse.trainingScore = String(GRADE_TO_TRAINING_100[grade] ?? 70); }
       }
     }
     return list;
@@ -1525,7 +1569,7 @@ export default function JRAPredictionTool() {
       if (data.raceClass) setRaceClass(data.raceClass);
       if (data.paceType) setPaceType(data.paceType);
       if (data.learningOn !== undefined) setLearningOn(data.learningOn);
-      if (data.learned) setLearned(data.learned);
+      if (data.learned) setLearned((prev) => ({ ...prev, ...data.learned }));
       if (data.historyCount !== undefined) setHistoryCount(data.historyCount);
       if (data.weights) setWeights(data.weights);
       if (data.agariBonus !== undefined) setAgariBonus(data.agariBonus);
@@ -1659,8 +1703,11 @@ export default function JRAPredictionTool() {
         oddsBonus = Math.max(-3.5, Math.min(3.5, marketEdge * (oddsStrength / 10)));
       }
 
-      // タイム指数で拾いにくい要素は、過大評価を避けて合計±12点程度に制限
-      const trainingAdj = (TRAINING_SCORE[h.training] ?? 0) * (learningOn ? learned.training : 1);
+      // 調教・厩舎コメントを100点化。50〜55点を中立として補正する。
+      const training100 = num(h.trainingScore) ?? GRADE_TO_TRAINING_100[h.training] ?? 70;
+      const comment100 = scoreCommentText(h.comment || "");
+      const trainingAdj = clamp((training100 - 65) / 5, -5.5, 6.0) * (learningOn ? learned.training : 1);
+      const commentAdj = clamp((comment100 - 55) / 8, -3.5, 4.5) * (learningOn ? learned.comment : 1);
       const styleAdj = (STYLE_PACE_SCORE[paceType]?.[h.runningStyle] ?? 0) * (learningOn ? learned.pace : 1);
       const fitAdj = (value, scale, key) => value === null ? 0 : clamp((value - 50) / scale, -2.2, 2.2) * (learningOn ? learned[key] : 1);
       const groundAdj = fitAdj(h._groundFit, 20, "ground");
@@ -1675,7 +1722,7 @@ export default function JRAPredictionTool() {
         bodyAdj = abs <= 6 ? 0.3 : abs <= 12 ? -0.3 : abs <= 18 ? -1.0 : -1.8;
         bodyAdj *= learningOn ? learned.body : 1;
       }
-      const contextAdj = clamp(trainingAdj + styleAdj + groundAdj + classAdj + jockeyAdj + gateAdj + pedigreeAdj + conditionAdj + bodyAdj, -12, 12);
+      const contextAdj = clamp(trainingAdj + commentAdj + styleAdj + groundAdj + classAdj + jockeyAdj + gateAdj + pedigreeAdj + conditionAdj + bodyAdj, -15, 15);
 
       const finalScore = score !== null ? score + oddsBonus + contextAdj : null;
       return {
@@ -1687,6 +1734,9 @@ export default function JRAPredictionTool() {
         _paceAdj: paceAdj,
         _reliabilityAdj: reliabilityAdj,
         _oddsBonus: oddsBonus,
+        _trainingScore: training100,
+        _commentScore: comment100,
+        _commentAdj: commentAdj,
         _contextAdj: contextAdj,
         _finalScore: finalScore,
       };
@@ -1697,13 +1747,73 @@ export default function JRAPredictionTool() {
     const withScore = computed.filter((h) => h._finalScore !== null);
     const sorted = [...withScore].sort((a, b) => b._finalScore - a._finalScore);
     const rankMap = new Map(sorted.map((h, i) => [h.id, i]));
-    const marks = ["◎", "○", "▲", "△", "△"];
+    const marks = ["◎", "○", "▲", "△", "△", "☆"];
     return computed.map((h) => {
       const idx = rankMap.get(h.id);
       const autoMark = idx !== undefined && idx < marks.length ? marks[idx] : "";
       return { ...h, _rank: idx !== undefined ? idx + 1 : null, _autoMark: autoMark };
     });
   }, [computed]);
+
+  const raceAnalytics = useMemo(() => {
+    const scored = ranked.filter((h) => h._finalScore !== null).sort((a,b)=>b._finalScore-a._finalScore);
+    if (!scored.length) return { chaos: 0, label: "未判定", reasons: [], marked: [], bets: [] };
+    const top = scored[0];
+    const second = scored[1];
+    const third = scored[2];
+    let chaos = 28;
+    const reasons: string[] = [];
+    const gap12 = top && second ? top._finalScore - second._finalScore : 8;
+    const gap15 = top && scored[4] ? top._finalScore - scored[4]._finalScore : 15;
+    if (gap12 < 1.5) { chaos += 16; reasons.push("上位2頭が拮抗"); }
+    else if (gap12 < 3) { chaos += 9; reasons.push("本命と対抗の差が小さい"); }
+    if (gap15 < 7) { chaos += 14; reasons.push("上位勢の指数差が小さい"); }
+    const favorite = scored.find((h)=>num(h.ninki)===1);
+    if (!favorite || favorite._rank >= 4) { chaos += 15; reasons.push("1番人気の信頼度が低め"); }
+    const valueHorses = scored.filter((h)=>num(h.ninki)!==null && num(h.ninki)>=6 && h._rank<=6);
+    if (valueHorses.length >= 2) { chaos += 14; reasons.push("人気薄の高評価馬が複数"); }
+    else if (valueHorses.length === 1) { chaos += 7; reasons.push("人気薄の高評価馬あり"); }
+    const missing = ranked.filter((h)=>h._finalScore===null).length;
+    if (missing >= 2) { chaos += 8; reasons.push("指数欠損馬が多い"); }
+    if (paceType === "H") { chaos += 6; reasons.push("ハイペース予測"); }
+    chaos = Math.round(clamp(chaos, 5, 95));
+    const label = chaos >= 80 ? "大波乱" : chaos >= 65 ? "波乱" : chaos >= 45 ? "中波乱" : chaos >= 25 ? "やや堅い" : "堅い";
+
+    const enhanced = ranked.map((h) => {
+      const popularity = num(h.ninki);
+      const valueGap = popularity !== null && h._rank !== null ? popularity - h._rank : 0;
+      const odds = num(h.odds);
+      const valueScore = Math.round(clamp(50 + valueGap * 7 + (odds && odds >= 10 ? 5 : 0), 20, 95));
+      return { ...h, _valueScore: valueScore };
+    });
+    const marked = enhanced.filter((h)=>h.mark || h._autoMark).map((h)=>({ ...h, _displayMark: h.mark || h._autoMark }))
+      .sort((a,b)=>(MARK_ORDER[a._displayMark]??9)-(MARK_ORDER[b._displayMark]??9));
+    const pick = (m) => marked.find((h)=>h._displayMark===m);
+    const main = pick("◎"), sub = pick("○"), thirdPick = pick("▲");
+    const deltas = marked.filter((h)=>["△","☆"].includes(h._displayMark)).slice(0,3);
+    const bets: string[] = [];
+    if (main) bets.push(`単勝 ${main.umaban}`);
+    if (main && sub) bets.push(`馬連 ${main.umaban}-${sub.umaban}`);
+    if (main) deltas.slice(0,2).forEach((h)=>bets.push(`ワイド ${main.umaban}-${h.umaban}`));
+    if (main && sub && thirdPick) bets.push(`三連複 ${main.umaban}-${sub.umaban}-${thirdPick.umaban}`);
+    return { chaos, label, reasons, marked, bets };
+  }, [ranked, paceType]);
+
+  const learningSummary = useMemo(() => {
+    const completed = savedRaces.filter((r)=>r.status === "completed");
+    let topWin=0, topPlace=0, markedPlace=0, total=0;
+    completed.forEach((r)=>{
+      const hs=(r.horses||[]).filter((h)=>num(h.finish)!==null);
+      if(!hs.length) return;
+      total += 1;
+      const sorted=[...hs].filter((h)=>num(h.predictedScore ?? h._finalScore)!==null).sort((a,b)=>num(b.predictedScore ?? b._finalScore)-num(a.predictedScore ?? a._finalScore));
+      const top=sorted[0];
+      if(top && num(top.finish)===1) topWin += 1;
+      if(top && num(top.finish)<=3) topPlace += 1;
+      if(hs.some((h)=>["◎","○","▲","△","☆"].includes(h.mark||h._autoMark||"") && num(h.finish)<=3)) markedPlace += 1;
+    });
+    return { total, topWin, topPlace, markedPlace };
+  }, [savedRaces]);
 
   const currentRaceSnapshot = (id: string = crypto.randomUUID(), previous: any = {}): any => ({
     ...previous,
@@ -1722,7 +1832,7 @@ export default function JRAPredictionTool() {
     oddsOn,
     decayScale,
     oddsStrength,
-    horses: horses.map((h) => sanitizeHorseRecord(h)),
+    horses: ranked.map((h) => ({ ...sanitizeHorseRecord(h), mark: h.mark || h._autoMark || "", predictedScore: h._finalScore })),
     status: previous.status || "pending",
     savedAt: previous.savedAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -1792,7 +1902,9 @@ export default function JRAPredictionTool() {
     const activeRecord = savedRaces.find((r) => r.id === raceId);
     const shouldLearn = !activeRecord?.learnedApplied;
     const factors = {
-      training: (h) => TRAINING_SCORE[h.training] ?? 0,
+      training: (h) => (h._trainingScore ?? num(h.trainingScore) ?? GRADE_TO_TRAINING_100[h.training] ?? 70) - 65,
+      comment: (h) => (h._commentScore ?? scoreCommentText(h.comment || "")) - 55,
+      value: (h) => { const p=num(h.ninki); return p===null||h._rank===null ? 0 : p-h._rank; },
       pace: (h) => STYLE_PACE_SCORE[paceType]?.[h.runningStyle] ?? 0,
       ground: (h) => h._groundFit === null ? 0 : h._groundFit - 50,
       classFit: (h) => h._classFit === null ? 0 : h._classFit - 50,
@@ -1931,6 +2043,32 @@ export default function JRAPredictionTool() {
           結果学習を予想へ反映（学習済み {historyCount}レース）
         </label>
         <div className="text-[11px] text-gray-400 mt-1">解析後は「レースを保存」。レース終了後に保存済みレースを開いて着順を入力すると、補正値を少しずつ調整します。</div>
+      </div>
+
+      {/* 注目馬・波乱度・学習状況 */}
+      {raceAnalytics.marked.length > 0 && (
+        <div className="mx-3 mt-3 grid gap-3 lg:grid-cols-3">
+          <div className="rounded-xl border border-indigo-200 bg-white p-3 shadow-sm lg:col-span-2">
+            <div className="mb-2 flex items-center justify-between"><div className="font-black text-indigo-900">🎯 印を付けた注目馬</div><div className="text-[10px] text-gray-400">印順</div></div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[680px] text-xs"><thead><tr className="bg-indigo-50 text-indigo-800"><th className="p-2">印</th><th>馬番</th><th className="text-left">馬名</th><th>総合</th><th>調教</th><th>コメント</th><th>人気</th><th>オッズ</th><th>期待値</th></tr></thead>
+              <tbody>{raceAnalytics.marked.map((h)=><tr key={`marked-${h.id}`} className="border-t border-gray-100"><td className="p-2 text-center text-lg font-black">{h._displayMark}</td><td className="text-center font-bold">{h.umaban}</td><td className="font-bold">{h.name}</td><td className="text-center font-black">{h._finalScore?.toFixed(1) ?? "-"}</td><td className="text-center">{h._trainingScore ?? "-"}</td><td className="text-center">{h._commentScore ?? "-"}</td><td className="text-center">{h.ninki || "-"}</td><td className="text-center">{h.odds || "-"}</td><td className="text-center font-bold">{h._valueScore}</td></tr>)}</tbody></table>
+            </div>
+          </div>
+          <div className="rounded-xl border border-rose-200 bg-white p-3 shadow-sm">
+            <div className="font-black text-rose-900">🌊 波乱度</div>
+            <div className="mt-1 flex items-end gap-2"><span className="text-4xl font-black text-rose-600">{raceAnalytics.chaos}</span><span className="pb-1 text-lg font-black">{raceAnalytics.label}</span></div>
+            <div className="mt-2 h-2 overflow-hidden rounded bg-gray-100"><div className="h-full bg-rose-500" style={{width:`${raceAnalytics.chaos}%`}} /></div>
+            <div className="mt-2 space-y-1 text-[11px] text-gray-600">{raceAnalytics.reasons.slice(0,4).map((r)=><div key={r}>・{r}</div>)}</div>
+            {raceAnalytics.bets.length > 0 && <div className="mt-3 rounded-lg bg-amber-50 p-2"><div className="text-[11px] font-black text-amber-900">参考買い目</div>{raceAnalytics.bets.map((b)=><div key={b} className="mt-1 text-xs font-bold text-amber-800">{b}</div>)}</div>}
+          </div>
+        </div>
+      )}
+
+      <div className="mx-3 mt-3 rounded-xl border border-violet-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2"><div><div className="font-black text-violet-900">🧠 自動学習</div><div className="text-[10px] text-gray-500">結果保存時に好走馬と凡走馬を比較して重みを自動調整</div></div><div className="text-sm font-black text-violet-700">{historyCount}レース学習</div></div>
+        <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs"><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">◎勝率</div><div className="font-black">{learningSummary.total ? Math.round(learningSummary.topWin/learningSummary.total*100) : 0}%</div></div><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">◎複勝率</div><div className="font-black">{learningSummary.total ? Math.round(learningSummary.topPlace/learningSummary.total*100) : 0}%</div></div><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">印馬好走</div><div className="font-black">{learningSummary.total ? Math.round(learningSummary.markedPlace/learningSummary.total*100) : 0}%</div></div></div>
+        <div className="mt-2 flex flex-wrap gap-1 text-[10px] text-gray-600">{Object.entries(learned).map(([k,v])=><span key={k} className="rounded bg-gray-100 px-2 py-1">{k}: {Number(v).toFixed(2)}</span>)}</div>
       </div>
 
       {resultEntryMode && (
