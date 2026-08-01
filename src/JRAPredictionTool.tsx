@@ -33,13 +33,13 @@ const scoreCommentText = (raw = "") => {
   else if (/^\s*○/.test(text)) score += 7;
   else if (/^\s*△/.test(text)) score -= 3;
   else if (/^\s*[×✕]/.test(text)) score -= 10;
-  const positives = [
+  const positives: Array<[RegExp, number]> = [
     [/ここ目標|目標に順調|態勢は整|仕上がった|力を出し切れば/, 8],
     [/好レース|楽しみ|期待|巻き返せる|見直し|押し切れ/, 5],
     [/良くなって|良化|上向|順調|落ち着き|適性.*合|条件.*合/, 4],
     [/距離短縮|距離延長|良馬場|減量騎手|自分の競馬/, 2],
   ];
-  const negatives = [
+  const negatives: Array<[RegExp, number]> = [
     [/様子見|使いつつ|どこまで|半信半疑|課題/, -6],
     [/モタれ|出遅れ|気ムラ|忙しかった|馬場.*応え|折り合い.*鍵/, -3],
     [/疲れ|状態ひと息|良化途上|まだ.*ない/, -5],
