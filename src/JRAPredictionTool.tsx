@@ -292,7 +292,7 @@ export default function JRAPredictionTool() {
     ["recent", "タイム指数（近5走）", "過去最高・前走・3走・2走"],
     ["pace", "AI展開予測", "ペース・推定タイム・前後半3F"],
     ["comment", "厩舎コメント", "状態・距離短縮・適性コメント"],
-    ["training", "調教評価", "馬番または馬名と S・A・B・C・D / ◎○▲△×"],
+    ["training", "調教評価", "馬番・馬名・短評・矢印・追い切り時計を含む調教全文"],
   ];
 
   const selectScanFile = (type, file) => {
@@ -440,34 +440,105 @@ export default function JRAPredictionTool() {
 
 
   const parseTrainingText = (text, baseList) => {
-    const lines = normalizeOcr(text).split("\n").map((x)=>x.trim()).filter(Boolean);
+    const rawLines = String(text || "")
+      .replace(/\r/g, "")
+      .split("\n")
+      .map((line) => line.replace(/[\t\u3000]+/g, " ").replace(/ {2,}/g, " ").trim())
+      .filter(Boolean);
     const list = baseList.map((h)=>({ ...h }));
-    const normalizeGrade = (raw) => {
-      const value = String(raw || "").trim().toUpperCase();
-      if (["S","A","B","C","D"].includes(value)) return value;
-      if (["◎","抜群","絶好","非常に良い"].some((x)=>value.includes(x))) return "S";
-      if (["○","良好","好調","上々","動き良い"].some((x)=>value.includes(x))) return "A";
-      if (["▲","順調","まずまず","平行線","普通"].some((x)=>value.includes(x))) return "B";
-      if (["△","一息","やや重い","物足りない"].some((x)=>value.includes(x))) return "C";
-      if (["×","不振","重い","遅れ","低調"].some((x)=>value.includes(x))) return "D";
-      return "";
-    };
-    for (const line of lines) {
-      const gradeMatch = line.match(/(?:^|[\s:：,、|｜])([SABCD])(?:$|[\s:：,、|｜])/i)
-        || line.match(/(◎|○|▲|△|×|抜群|絶好|非常に良い|良好|好調|上々|動き良い|順調|まずまず|平行線|普通|一息|やや重い|物足りない|不振|重い|遅れ|低調)/);
-      const grade = normalizeGrade(gradeMatch?.[1]);
-      if (!grade) continue;
-      const numberMatch = line.match(/^\s*(\d{1,2})(?:\s|番|枠)/);
-      let horse = numberMatch ? list.find((h)=>String(h.umaban)===numberMatch[1]) : null;
-      if (!horse) {
-        const nameCandidates = line.match(/[ァ-ヶー一-龠A-Za-z0-9・･]{2,24}/g) || [];
-        for (const candidate of nameCandidates) {
-          if (["S","A","B","C","D"].includes(candidate.toUpperCase())) continue;
-          horse = findHorse(candidate, list);
-          if (horse) break;
-        }
+
+    // 競馬ブック等の「馬番 馬名 短評 矢印」を各馬ブロックの先頭として扱う。
+    // 直前に枠番だけの行（例: 8）があっても無視し、馬番付きの見出し行から次の見出し直前までを1頭分にまとめる。
+    const headerRe = /^(\d{1,2})\s+([ァ-ヶー一-龠A-Za-z0-9・･]+)\s+(.+?)\s*([↗↘→↑↓])$/;
+    const blocks = [];
+    let current = null;
+    for (const line of rawLines) {
+      const m = line.match(headerRe);
+      if (m && Number(m[1]) >= 1 && Number(m[1]) <= 18) {
+        if (current) blocks.push(current);
+        current = { umaban: m[1], name: m[2], summary: m[3], arrow: m[4], lines: [] };
+        continue;
       }
-      if (horse) horse.training = grade;
+      if (current) current.lines.push(line);
+    }
+    if (current) blocks.push(current);
+
+    const scoreBlock = (block) => {
+      const latest = block.lines.slice(-7).join(" ");
+      const all = `${block.summary} ${latest}`;
+      let score = 0;
+
+      if (/[↗↑]/.test(block.arrow)) score += 2;
+      if (/[↘↓]/.test(block.arrow)) score -= 2;
+
+      const strongPositive = [
+        /抜群/, /絶好/, /好気配/, /力強い/, /鋭い/, /迫力/, /文句なし/, /申し分なし/,
+        /伸び良好/, /動き良好/, /時計優秀/, /好時計/
+      ];
+      const positive = [
+        /良化/, /上向き/, /順調/, /動く/, /軽快/, /余力十分/, /反応良/, /脚捌き良/,
+        /仕上がり良/, /気配上々/, /馬なり余力/
+      ];
+      const negative = [
+        /モタれ/, /前向きさに欠け/, /上昇味薄い/, /物足りない/, /重い/, /反応鈍/,
+        /伸び欠く/, /気配平凡/, /一息/, /遅れ/, /バテ/, /低調/
+      ];
+      const strongNegative = [
+        /大きく遅れ/, /一杯.*遅れ/, /動き重い/, /精彩欠く/, /状態ひと息/, /不振/
+      ];
+
+      for (const re of strongPositive) if (re.test(all)) score += 3;
+      for (const re of positive) if (re.test(all)) score += 1;
+      for (const re of negative) if (re.test(all)) score -= 2;
+      for (const re of strongNegative) if (re.test(all)) score -= 2;
+
+      // 「連闘のため中間軽め」「攻め軽め」は悪化扱いにせず、評価の上振れだけ抑える。
+      if (/連闘.*中間軽め|攻め軽め/.test(block.summary)) score = Math.min(score, 1);
+
+      if (score >= 5) return "S";
+      if (score >= 2) return "A";
+      if (score >= -1) return "B";
+      if (score >= -4) return "C";
+      return "D";
+    };
+
+    let applied = 0;
+    for (const block of blocks) {
+      const horse = list.find((h)=>String(h.umaban)===block.umaban) || findHorse(block.name, list);
+      if (!horse) continue;
+      horse.training = scoreBlock(block);
+      applied += 1;
+    }
+
+    // 従来の「馬番 馬名 A」「◎/○/▲/△/×」形式も引き続き対応。
+    if (applied === 0) {
+      const normalizeGrade = (raw) => {
+        const value = String(raw || "").trim().toUpperCase();
+        if (["S","A","B","C","D"].includes(value)) return value;
+        if (["◎","抜群","絶好","非常に良い"].some((x)=>value.includes(x))) return "S";
+        if (["○","良好","好調","上々","動き良い"].some((x)=>value.includes(x))) return "A";
+        if (["▲","順調","まずまず","平行線","普通"].some((x)=>value.includes(x))) return "B";
+        if (["△","一息","やや重い","物足りない"].some((x)=>value.includes(x))) return "C";
+        if (["×","不振","重い","遅れ","低調"].some((x)=>value.includes(x))) return "D";
+        return "";
+      };
+      for (const line of rawLines) {
+        const gradeMatch = line.match(/(?:^|[\s:：,、|｜])([SABCD])(?:$|[\s:：,、|｜])/i)
+          || line.match(/(◎|○|▲|△|×|抜群|絶好|非常に良い|良好|好調|上々|動き良い|順調|まずまず|平行線|普通|一息|やや重い|物足りない|不振|重い|遅れ|低調)/);
+        const grade = normalizeGrade(gradeMatch?.[1]);
+        if (!grade) continue;
+        const numberMatch = line.match(/^\s*(\d{1,2})(?:\s|番|枠)/);
+        let horse = numberMatch ? list.find((h)=>String(h.umaban)===numberMatch[1]) : null;
+        if (!horse) {
+          const nameCandidates = line.match(/[ァ-ヶー一-龠A-Za-z0-9・･]{2,24}/g) || [];
+          for (const candidate of nameCandidates) {
+            if (["S","A","B","C","D"].includes(candidate.toUpperCase())) continue;
+            horse = findHorse(candidate, list);
+            if (horse) break;
+          }
+        }
+        if (horse) horse.training = grade;
+      }
     }
     return list;
   };
