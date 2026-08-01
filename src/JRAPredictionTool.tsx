@@ -338,70 +338,128 @@ export default function JRAPredictionTool() {
   };
 
   const parseRaceText = (text, baseList) => {
-    const lines = normalizeOcr(text).split("\n").map((x) => x.trim()).filter(Boolean);
-    let list = baseList.length ? baseList.map((h) => ({ ...h })) : [];
-    const header = lines.slice(0, 12).join(" ");
-    const distM = header.match(/(芝|ダート|ダ)\s*(\d{3,4})m?/i);
-    if (distM) { setSurface(distM[1] === "芝" ? "芝" : "ダート"); setDistance(distM[2]); }
-    const trackM = header.match(new RegExp(`(${JRA_TRACKS.join("|")})`));
-    if (trackM) setTrack(trackM[1]);
-    const raceM = header.match(/(\d{1,2})R\s*([^\n]{2,16})/);
-    if (raceM) setRaceName(`${raceM[1]}R ${raceM[2].trim()}`);
-    const paceM = header.match(/(?:ペース|予測)\s*[:：]?\s*([SMH])/i);
-    if (paceM) setPaceType(paceM[1].toUpperCase());
+    const lines = String(text || "")
+      .replace(/\r/g, "")
+      .split("\n")
+      .map((x) => x.replace(/[\t\u3000]+/g, " ").replace(/ {2,}/g, " ").trim())
+      .filter(Boolean);
+    const list = baseList.map((h) => ({ ...h }));
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      let m = line.match(/^(\d{1,2})\s+([ァ-ヶー一-龠A-Za-z0-9・･]{2,24})/);
-      if (!m) continue;
-      const umaban = m[1];
-      const name = m[2];
-      if (["馬番", "人気", "単勝"].includes(name)) continue;
+    const isHorseNumber = (line) => /^\d{1,2}$/.test(line) && Number(line) >= 1 && Number(line) <= 18;
+    const isHorseName = (line) => /^[ァ-ヶー一-龠A-Za-z0-9・･ー]{2,30}$/.test(line)
+      && !/(人気|データベース|芝|ダート|良|稍|重|不良)/.test(line);
+
+    for (let i = 0; i < lines.length; i += 1) {
+      if (!isHorseNumber(lines[i])) continue;
+      const umaban = lines[i];
+      const nameLine = lines[i + 1] || "";
+      if (!isHorseName(nameLine)) continue;
+
+      const name = nameLine;
+      const info = lines[i + 2] || "";
+      const oddsLine = lines[i + 3] || "";
+      const bodyLine = lines[i + 4] || "";
+      const changeLine = lines[i + 5] || "";
+
       let h = list.find((x) => String(x.umaban) === umaban) || findHorse(name, list);
       if (!h) { h = { ...emptyHorse(), umaban, name }; list.push(h); }
-      h.umaban = umaban; h.name = name;
-      const joined = lines.slice(i, Math.min(i + 3, lines.length)).join(" ");
-      const sex = joined.match(/(牡|牝|セ)\s*(\d{1,2})/);
-      if (!h.sex && sex) h.sex = `${sex[1]}${sex[2]}`;
-      const weight = joined.match(/(?:牡|牝|セ)\s*\d{1,2}.*?([45]\d(?:\.\d)?)\s*(?:kg)?/);
+      h.umaban = umaban;
+      h.name = name;
+
+      const sex = info.match(/(牡|牝|セ)\s*(\d{1,2})/);
+      if (sex) h.sex = `${sex[1]}${sex[2]}`;
+
+      const weight = info.match(/([45]\d(?:\.\d)?)\s*$/);
       if (weight) h.weight = weight[1];
-      const oddsPop = joined.match(/(\d{1,3}(?:\.\d)?)\s*(?:倍)?\s*(\d{1,2})\s*人気/);
+
+      const dbMarker = "のデータベース";
+      const dbPos = info.indexOf(dbMarker);
+      const jockeyPart = (dbPos >= 0 ? info.slice(dbPos + dbMarker.length) : info)
+        .replace(/^(?:牡|牝|セ)\d+\s*/, "")
+        .replace(/([45]\d(?:\.\d)?)\s*$/, "")
+        .trim();
+      if (jockeyPart) h.jockey = jockeyPart.replace(/^[☆◇▲△★]/, "").trim();
+
+      const oddsPop = `${oddsLine} ${bodyLine}`.match(/(\d{1,3}(?:\.\d+)?)\s+(\d{1,2})人気/);
       if (oddsPop) { h.odds = oddsPop[1]; h.ninki = oddsPop[2]; }
-      const jockey = joined.match(/([ァ-ヶー一-龠]{2,7})\s*(?:△|▲|☆|◇)?\s*[45]\d(?:\.\d)?/);
-      if (jockey) h.jockey = jockey[1];
+      else {
+        const odds = oddsLine.match(/^\d{1,3}(?:\.\d+)?$/);
+        const pop = oddsLine.match(/(\d{1,2})人気/) || bodyLine.match(/(\d{1,2})人気/);
+        if (odds) h.odds = odds[0];
+        if (pop) h.ninki = pop[1];
+      }
+
+      const body = bodyLine.match(/(?:^|\s)(\d{3})(?:\s|$)/) || changeLine.match(/^(\d{3})$/);
+      const change = [bodyLine, changeLine].map((v) => v.match(/^\(([+-]?\d+)\)$/)).find(Boolean);
+      if (body) h.bodyChange = change ? `${body[1]}(${change[1]})` : body[1];
     }
     return list.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
   };
 
   const parseIndexText = (text, baseList, recentMode = false) => {
-    const lines = normalizeOcr(text).split("\n").map((x) => x.trim()).filter(Boolean);
+    const lines = String(text || "")
+      .replace(/\r/g, "")
+      .split("\n")
+      .map((x) => x.replace(/[\t\u3000]+/g, " ").replace(/ {2,}/g, " ").trim())
+      .filter(Boolean);
     const list = baseList.map((h) => ({ ...h }));
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const m = line.match(/^(\d{1,2})\s+([ァ-ヶー一-龠A-Za-z0-9・･]{2,24})\s+(.*)$/);
-      if (!m) continue;
-      const h = list.find((x) => String(x.umaban) === m[1]) || findHorse(m[2], list);
-      if (!h) continue;
-      const joined = [m[3], lines[i+1] || ""].join(" ");
-      const vals = (joined.match(/(?<![\d.])-?\d{1,3}(?:\.\d)?\*?/g) || [])
-        .map((v)=>v.replace("*", ""))
-        .filter((v)=>Number(v) >= 0 && Number(v) <= 140);
-      if (!recentMode) {
-        if (vals.length >= 4) { h.best=vals[0]; h.start=vals[1]; h.oikake=vals[2]; h.agari=vals[3]; }
-        if (vals.length >= 5) h.avg5=vals[4];
-        if (vals.length >= 6) h.dist=vals[5];
-        if (vals.length >= 7) h.course=vals[6];
-        if (vals.length >= 8) h.r3=vals[vals.length-3];
-        if (vals.length >= 9) h.r2=vals[vals.length-2];
-        if (vals.length >= 10) h.r1=vals[vals.length-1];
-      } else {
-        const idx = vals.filter((v)=>Number(v) >= 20);
-        if (idx.length >= 4) { h.best=idx[0]; h.start=idx[idx.length-3]; h.oikake=idx[idx.length-2]; h.agari=idx[idx.length-1]; }
-        if (idx.length >= 1) h.avg5=idx[0];
-        if (idx.length >= 4) { h.r3=idx[idx.length-3]; h.r2=idx[idx.length-2]; h.r1=idx[idx.length-1]; }
+    const isNumberLine = (line) => /^\d{1,2}$/.test(line) && Number(line) >= 1 && Number(line) <= 18;
+
+    if (!recentMode) {
+      // 形式: 馬番(単独行) / 馬名 全体 ST 追走 上がり 5走平均 距離 コース 3走 2走 前走 性齢 斤量 騎手 オッズ 人気
+      for (let i = 0; i < lines.length - 1; i += 1) {
+        if (!isNumberLine(lines[i])) continue;
+        const umaban = lines[i];
+        const cols = lines[i + 1].split(/\s+/);
+        if (cols.length < 8) continue;
+        const name = cols[0];
+        const sexIdx = cols.findIndex((v, idx) => idx > 1 && /^(牡|牝|セ)\d{1,2}$/.test(v));
+        if (sexIdx < 5) continue;
+        const values = cols.slice(1, sexIdx);
+        let h = list.find((x) => String(x.umaban) === umaban) || findHorse(name, list);
+        if (!h) { h = { ...emptyHorse(), umaban, name }; list.push(h); }
+        h.umaban = umaban; h.name = name;
+        const clean = (v) => String(v ?? "").replace(/\*/g, "");
+        [h.best,h.start,h.oikake,h.agari,h.avg5,h.dist,h.course,h.r3,h.r2,h.r1] = Array.from({length:10},(_,k)=>clean(values[k] ?? ""));
+        h.sex = cols[sexIdx] || h.sex;
+        h.weight = cols[sexIdx + 1] || h.weight;
+        h.jockey = String(cols[sexIdx + 2] || h.jockey || "").replace(/^[☆◇▲△★]/, "");
+        h.odds = cols[sexIdx + 3] || h.odds;
+        h.ninki = cols[sexIdx + 4] || h.ninki;
       }
+      return list.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
     }
-    return list;
+
+    // 近5走は各馬ブロック末尾の「4指数 オッズ 人気」を使用する。
+    for (let i = 0; i < lines.length; i += 1) {
+      if (!isNumberLine(lines[i])) continue;
+      const umaban = lines[i];
+      const name = lines[i + 1] || "";
+      if (!name || /^\d/.test(name)) continue;
+      let end = lines.length;
+      for (let j = i + 2; j < lines.length; j += 1) {
+        if (isNumberLine(lines[j]) && j + 1 < lines.length && !/^\d/.test(lines[j + 1])) { end = j; break; }
+      }
+      const block = lines.slice(i + 2, end);
+      const summary = [...block].reverse().find((line) => {
+        const parts = line.split(/\s+/);
+        return parts.length >= 6 && parts.slice(0,4).every((v)=>/^\d{1,3}(?:\.\d+)?\*?$/.test(v));
+      });
+      if (!summary) continue;
+      const parts = summary.split(/\s+/);
+      let h = list.find((x) => String(x.umaban) === umaban) || findHorse(name, list);
+      if (!h) { h = { ...emptyHorse(), umaban, name }; list.push(h); }
+      h.umaban = umaban; h.name = name;
+      const vals = parts.slice(0,4).map((v)=>v.replace(/\*/g, ""));
+      h.avg5 = vals[0] || h.avg5;
+      h.r3 = vals[1] || h.r3;
+      h.r2 = vals[2] || h.r2;
+      h.r1 = vals[3] || h.r1;
+      if (parts[4]) h.odds = parts[4];
+      if (parts[5]) h.ninki = parts[5];
+      i = end - 1;
+    }
+    return list.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
   };
 
   const commentScore = (comment) => {
@@ -418,19 +476,25 @@ export default function JRAPredictionTool() {
   };
 
   const parseCommentText = (text, baseList) => {
-    const lines = normalizeOcr(text).split("\n").map((x)=>x.trim()).filter(Boolean);
+    const lines = String(text || "")
+      .replace(/\r/g, "")
+      .split("\n")
+      .map((x)=>x.replace(/[\t\u3000]+/g," ").replace(/ {2,}/g," ").trim())
+      .filter(Boolean);
     const list = baseList.map((h)=>({ ...h }));
+    const headerRe = /^(\d{1,2})\s+([ァ-ヶー一-龠A-Za-z0-9・･ー]{2,30})$/;
     for (let i=0;i<lines.length;i++) {
-      const m = lines[i].match(/^(\d{1,2})\s+([ァ-ヶー一-龠A-Za-z0-9・･]{2,24})/);
+      const m = lines[i].match(headerRe);
       if (!m) continue;
       const h = list.find((x)=>String(x.umaban)===m[1]) || findHorse(m[2], list);
       if (!h) continue;
-      let block = lines[i];
-      for (let j=i+1;j<Math.min(i+5,lines.length);j++) {
-        if (/^\d{1,2}\s+[ァ-ヶー一-龠]/.test(lines[j])) break;
-        block += " " + lines[j];
+      const chunks = [];
+      for (let j=i+1;j<lines.length;j++) {
+        if (headerRe.test(lines[j])) break;
+        if (/^\d{1,2}$/.test(lines[j])) continue; // 枠番だけの行
+        chunks.push(lines[j]);
       }
-      h.comment = block.replace(/^\d{1,2}\s+[^ ]+\s*/, "");
+      h.comment = chunks.join(" ").replace(/^[◎○▲△×]\s*/, "");
       h.condition = String(commentScore(h.comment));
       if (/距離短縮.*(?:期待|合う|プラス)|短縮.*好材料/.test(h.comment)) h.classFit = String(Math.max(num(h.classFit)||50, 56));
       if (/芝.*(?:合う|問題ない)|ダート.*(?:合う|問題ない)/.test(h.comment)) h.groundFit = String(Math.max(num(h.groundFit)||50, 56));
@@ -1924,7 +1988,7 @@ export default function JRAPredictionTool() {
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <button onClick={()=>{
-              let next=horses.map(h=>({...h}));
+              let next=scanText.race ? [] : horses.map(h=>({...h}));
               if(scanText.race) next=parseRaceText(scanText.race,next);
               if(scanText.standard) next=parseIndexText(scanText.standard,next,false);
               if(scanText.recent) next=parseIndexText(scanText.recent,next,true);
@@ -1932,7 +1996,7 @@ export default function JRAPredictionTool() {
               if(scanText.comment) next=parseCommentText(scanText.comment,next);
               if(scanText.training) next=parseTrainingText(scanText.training,next);
               setHorses(next);
-              flash(`${next.length}頭へテキストを反映しました`);
+              flash(`${next.filter((h)=>h.name && h.umaban).length}頭へテキストを反映しました`);
             }} className="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-black text-white shadow">テキストを一括反映</button>
             <button onClick={()=>setScanText({race:"",standard:"",recent:"",pace:"",comment:"",training:""})} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-bold text-gray-600">入力欄をクリア</button>
           </div>
