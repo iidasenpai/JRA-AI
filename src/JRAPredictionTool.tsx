@@ -1612,8 +1612,13 @@ export default function JRAPredictionTool() {
   const saveResultAndLearn = () => {
     const raceId = activeSavedRaceId;
     if (!raceId) { flash("先に保存済みレースから対象レースを開いてください"); return; }
-    const finished = ranked.filter((h) => num(h.finish) !== null && h._finalScore !== null);
-    if (finished.length < 3) { flash("最低3頭の着順を入力してください"); return; }
+    // 着順入力の完了判定は「総合指数の有無」と切り離す。
+    // OCR欠損などで総合指数が空欄の馬でも、着順を入力済みなら結果として保存できる。
+    const enteredResults = ranked.filter((h) => num(h.finish) !== null);
+    if (enteredResults.length < 3) { flash("最低3頭の着順を入力してください"); return; }
+
+    // 学習計算には総合指数を算出できる馬だけを使用する。
+    const finished = enteredResults.filter((h) => h._finalScore !== null);
     const activeRecord = savedRaces.find((r) => r.id === raceId);
     const shouldLearn = !activeRecord?.learnedApplied;
     const factors = {
@@ -1627,7 +1632,8 @@ export default function JRAPredictionTool() {
       pedigree: (h) => h._pedigreeFit === null ? 0 : h._pedigreeFit - 50,
       condition: (h) => h._condition === null ? 0 : h._condition - 50,
     };
-    if (shouldLearn) {
+    const canLearn = shouldLearn && finished.length >= 3;
+    if (canLearn) {
       setLearned((prev) => {
         const next = { ...prev };
         Object.entries(factors).forEach(([key, getter]) => {
@@ -1646,12 +1652,12 @@ export default function JRAPredictionTool() {
     const updated = currentRaceSnapshot(raceId, activeRecord || {});
     updated.status = "completed";
     updated.completedAt = new Date().toISOString();
-    updated.learnedApplied = activeRecord?.learnedApplied || shouldLearn;
+    updated.learnedApplied = activeRecord?.learnedApplied || canLearn;
     updated.horses = horses.map((h) => ({ ...h }));
     setSavedRaces((prev) => [updated, ...prev.filter((r) => r.id !== raceId)]);
     setResultEntryMode(false);
     setSavedRacesOpen(true);
-    flash(shouldLearn ? "結果を保存し、補正値を学習しました" : "結果の修正を保存しました");
+    flash(canLearn ? "結果を保存し、補正値を学習しました" : "結果を保存しました");
   };
 
   const setW = (key, val) => setWeights((w) => ({ ...w, [key]: Number(val) }));
