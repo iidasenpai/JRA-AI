@@ -102,7 +102,7 @@ export default function JRAPredictionTool() {
   const [scanOpen, setScanOpen] = useState(true);
   const [scanFiles, setScanFiles] = useState({ race: null, standard: null, recent: null, pace: null, comment: null });
   const [scanPreview, setScanPreview] = useState({});
-  const [scanText, setScanText] = useState({ race: "", standard: "", recent: "", pace: "", comment: "" });
+  const [scanText, setScanText] = useState({ race: "", standard: "", recent: "", pace: "", comment: "", training: "" });
   const [azureDebug, setAzureDebug] = useState({});
   const [azureLastError, setAzureLastError] = useState("");
   const [scanProgress, setScanProgress] = useState(0);
@@ -285,13 +285,14 @@ export default function JRAPredictionTool() {
     flash(`${parsed.length}頭を取り込みました`);
   };
 
-  // ---- スクリーンショットOCR ----
+  // ---- テキスト一括入力 ----
   const SCAN_TYPES = [
-    ["race", "出馬表", "馬名・騎手・斤量・オッズ・人気"],
+    ["race", "出馬表", "馬番・馬名・性齢・斤量・騎手・オッズ・人気"],
     ["standard", "タイム指数（標準）", "全体・スタート・追走・上がり・5走平均"],
     ["recent", "タイム指数（近5走）", "過去最高・前走・3走・2走"],
     ["pace", "AI展開予測", "ペース・推定タイム・前後半3F"],
     ["comment", "厩舎コメント", "状態・距離短縮・適性コメント"],
+    ["training", "調教評価", "馬番または馬名と S・A・B・C・D / ◎○▲△×"],
   ];
 
   const selectScanFile = (type, file) => {
@@ -433,6 +434,40 @@ export default function JRAPredictionTool() {
       h.condition = String(commentScore(h.comment));
       if (/距離短縮.*(?:期待|合う|プラス)|短縮.*好材料/.test(h.comment)) h.classFit = String(Math.max(num(h.classFit)||50, 56));
       if (/芝.*(?:合う|問題ない)|ダート.*(?:合う|問題ない)/.test(h.comment)) h.groundFit = String(Math.max(num(h.groundFit)||50, 56));
+    }
+    return list;
+  };
+
+
+  const parseTrainingText = (text, baseList) => {
+    const lines = normalizeOcr(text).split("\n").map((x)=>x.trim()).filter(Boolean);
+    const list = baseList.map((h)=>({ ...h }));
+    const normalizeGrade = (raw) => {
+      const value = String(raw || "").trim().toUpperCase();
+      if (["S","A","B","C","D"].includes(value)) return value;
+      if (["◎","抜群","絶好","非常に良い"].some((x)=>value.includes(x))) return "S";
+      if (["○","良好","好調","上々","動き良い"].some((x)=>value.includes(x))) return "A";
+      if (["▲","順調","まずまず","平行線","普通"].some((x)=>value.includes(x))) return "B";
+      if (["△","一息","やや重い","物足りない"].some((x)=>value.includes(x))) return "C";
+      if (["×","不振","重い","遅れ","低調"].some((x)=>value.includes(x))) return "D";
+      return "";
+    };
+    for (const line of lines) {
+      const gradeMatch = line.match(/(?:^|[\s:：,、|｜])([SABCD])(?:$|[\s:：,、|｜])/i)
+        || line.match(/(◎|○|▲|△|×|抜群|絶好|非常に良い|良好|好調|上々|動き良い|順調|まずまず|平行線|普通|一息|やや重い|物足りない|不振|重い|遅れ|低調)/);
+      const grade = normalizeGrade(gradeMatch?.[1]);
+      if (!grade) continue;
+      const numberMatch = line.match(/^\s*(\d{1,2})(?:\s|番|枠)/);
+      let horse = numberMatch ? list.find((h)=>String(h.umaban)===numberMatch[1]) : null;
+      if (!horse) {
+        const nameCandidates = line.match(/[ァ-ヶー一-龠A-Za-z0-9・･]{2,24}/g) || [];
+        for (const candidate of nameCandidates) {
+          if (["S","A","B","C","D"].includes(candidate.toUpperCase())) continue;
+          horse = findHorse(candidate, list);
+          if (horse) break;
+        }
+      }
+      if (horse) horse.training = grade;
     }
     return list;
   };
@@ -1796,36 +1831,41 @@ export default function JRAPredictionTool() {
         </div>
       )}
 
-      {/* 操作ボタン */}
-      <div className="mx-3 mt-3 bg-white rounded-xl shadow-sm border border-blue-200 overflow-hidden">
-        <button onClick={()=>setScanOpen((v)=>!v)} className="w-full flex items-center justify-between px-4 py-3 bg-blue-50 text-left">
-          <div><div className="font-black text-blue-900">📷 スクショ自動入力</div><div className="text-[11px] text-blue-700 mt-0.5">5種類のうち、用意できた画像だけでOK</div></div>
-          <span className="text-blue-700">{scanOpen ? "▲" : "▼"}</span>
+      {/* テキスト一括入力 */}
+      <div className="mx-3 mt-3 overflow-hidden rounded-xl border border-emerald-200 bg-white shadow-sm">
+        <button onClick={()=>setScanOpen((v)=>!v)} className="flex w-full items-center justify-between bg-emerald-50 px-4 py-3 text-left">
+          <div><div className="font-black text-emerald-900">📝 テキスト一括入力</div><div className="mt-0.5 text-[11px] text-emerald-700">各サイトの表示内容をコピーして、対応する欄へそのまま貼り付けます</div></div>
+          <span className="text-emerald-700">{scanOpen ? "▲" : "▼"}</span>
         </button>
         {scanOpen && <div className="p-3">
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-            {SCAN_TYPES.map(([type,label,desc])=><label key={type} className="border border-dashed border-gray-300 rounded-lg p-2 text-center cursor-pointer bg-gray-50 hover:bg-blue-50">
-              <input type="file" accept="image/*" className="hidden" onChange={(e)=>selectScanFile(type,e.target.files?.[0])}/>
-              {scanPreview[type] ? <img src={scanPreview[type]} className="w-full h-20 object-cover rounded mb-1"/> : <div className="h-20 flex items-center justify-center text-2xl">＋</div>}
-              <div className="text-[11px] font-bold text-gray-800">{label}</div>
-              <div className="text-[9px] text-gray-400 mt-0.5">{desc}</div>
-            </label>)}
+          <div className="grid gap-3 sm:grid-cols-2">
+            {SCAN_TYPES.map(([type,label,desc])=><div key={type} className="rounded-lg border border-gray-200 bg-gray-50 p-2">
+              <div className="text-xs font-black text-gray-800">{label}</div>
+              <div className="mb-1 mt-0.5 text-[10px] text-gray-500">{desc}</div>
+              <textarea
+                rows={type === "comment" ? 8 : 6}
+                value={scanText[type]}
+                onChange={(e)=>setScanText((v)=>({...v,[type]:e.target.value}))}
+                placeholder={`${label}のテキストを貼り付け`}
+                className="w-full rounded-lg border border-gray-300 bg-white p-2 text-[11px] font-mono outline-none focus:border-emerald-500"
+              />
+            </div>)}
           </div>
-          <div className="flex items-center gap-3 mt-3">
-            <button disabled={scanBusy} onClick={analyzeScreenshots} className="bg-blue-700 disabled:bg-gray-400 text-white text-sm font-black px-4 py-2.5 rounded-lg shadow">{scanBusy ? "解析中…" : "画像を解析して自動入力"}</button>
-            <div className="flex-1">
-              <div className="h-2 bg-gray-200 rounded overflow-hidden"><div className="h-full bg-blue-600 transition-all" style={{width:`${scanProgress}%`}}/></div>
-              <div className="text-[10px] text-gray-500 mt-1">{scanLog || "Azure Document Intelligenceを優先し、失敗時のみ端末内OCRへ切り替えます。キーはブラウザへ公開されません。"}</div>
-            </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button onClick={()=>{
+              let next=horses.map(h=>({...h}));
+              if(scanText.race) next=parseRaceText(scanText.race,next);
+              if(scanText.standard) next=parseIndexText(scanText.standard,next,false);
+              if(scanText.recent) next=parseIndexText(scanText.recent,next,true);
+              if(scanText.pace) parsePaceText(scanText.pace);
+              if(scanText.comment) next=parseCommentText(scanText.comment,next);
+              if(scanText.training) next=parseTrainingText(scanText.training,next);
+              setHorses(next);
+              flash(`${next.length}頭へテキストを反映しました`);
+            }} className="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-black text-white shadow">テキストを一括反映</button>
+            <button onClick={()=>setScanText({race:"",standard:"",recent:"",pace:"",comment:"",training:""})} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-bold text-gray-600">入力欄をクリア</button>
           </div>
-          <details className="mt-2"><summary className="text-[10px] text-gray-400 cursor-pointer">OCR原文を確認・修正</summary>
-            <div className="grid sm:grid-cols-2 gap-2 mt-2">{SCAN_TYPES.map(([type,label])=><div key={type}><div className="text-[10px] font-bold mb-1">{label}</div><textarea rows={4} value={scanText[type]} onChange={(e)=>setScanText((v)=>({...v,[type]:e.target.value}))} className="w-full border rounded p-1 text-[9px] font-mono"/></div>)}</div>
-            {azureLastError && <div className="mt-2 rounded border border-red-200 bg-red-50 p-2 text-[10px] text-red-700">Azureエラー: {azureLastError}</div>}
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button onClick={()=>{let next=horses.map(h=>({...h})); if(scanText.race)next=parseRaceText(scanText.race,next); if(scanText.standard)next=parseIndexText(scanText.standard,next,false); if(scanText.recent)next=parseIndexText(scanText.recent,next,true); if(scanText.pace)parsePaceText(scanText.pace); if(scanText.comment)next=parseCommentText(scanText.comment,next); setHorses(next); flash("修正したOCR原文を再反映しました");}} className="bg-green-600 text-white text-xs font-bold px-3 py-2 rounded">修正テキストを再反映</button>
-              <button onClick={downloadAzureDebug} className="bg-slate-700 text-white text-xs font-bold px-3 py-2 rounded">Azure解析JSONを書き出す</button>
-            </div>
-          </details>
+          <div className="mt-2 text-[10px] leading-relaxed text-gray-500">入力できない欄は空のままでOKです。取り込み後は下の表で読み違いだけ修正してください。</div>
         </div>}
       </div>
 
