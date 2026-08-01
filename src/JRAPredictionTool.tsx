@@ -1589,7 +1589,13 @@ export default function JRAPredictionTool() {
     setActiveSavedRaceId(race.id);
     setResultEntryMode(forResult);
     setSavedRacesOpen(false);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (forResult) {
+      setTimeout(() => {
+        document.getElementById("result-entry-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 80);
+    } else {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
     flash(forResult ? "保存済みレースを読み込みました。着順を入力してください" : "保存済みレースを読み込みました");
   };
 
@@ -1752,9 +1758,35 @@ export default function JRAPredictionTool() {
       </div>
 
       {resultEntryMode && (
-        <div className="mx-3 mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3">
-          <div className="font-black text-amber-900">🏁 レース後結果入力モード</div>
-          <div className="mt-1 text-[11px] text-amber-700">保存済みレースを読み込んでいます。各馬の着順を入力し、下の「結果保存・学習」を押してください。</div>
+        <div id="result-entry-panel" className="mx-3 mt-3 scroll-mt-3 rounded-xl border-2 border-amber-400 bg-amber-50 p-3 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="font-black text-amber-900">🏁 レース後結果入力</div>
+              <div className="mt-1 text-[11px] text-amber-700">馬番ごとに着順を入力してください。横スクロールは不要です。</div>
+            </div>
+            <button onClick={() => setResultEntryMode(false)} className="shrink-0 rounded border border-amber-300 bg-white px-2 py-1 text-[10px] font-bold text-amber-800">閉じる</button>
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {ranked.slice().sort((a,b)=>Number(a.umaban||0)-Number(b.umaban||0)).map((h) => (
+              <label key={`finish-${h.id}`} className="flex items-center gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2">
+                <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-gray-300 text-xs font-black">{h.umaban || "-"}</span>
+                <span className="min-w-0 flex-1 truncate text-xs font-bold text-gray-800">{h.name || `馬番${h.umaban || "-"}`}</span>
+                <input
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={h.finish ?? ""}
+                  onChange={(e)=>updateHorse(h.id,"finish",e.target.value.replace(/[^0-9]/g, "").slice(0,2))}
+                  className="w-16 rounded-lg border-2 border-amber-300 bg-amber-50 px-2 py-2 text-center text-base font-black text-amber-950 outline-none focus:border-amber-500"
+                  placeholder="着順"
+                  aria-label={`${h.name || h.umaban}の着順`}
+                />
+              </label>
+            ))}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button onClick={saveResultAndLearn} className="rounded-lg bg-purple-700 px-4 py-2.5 text-sm font-black text-white shadow-sm">結果保存・学習</button>
+            <button onClick={() => setHorses((prev)=>prev.map((h)=>({...h,finish:""})))} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-bold text-gray-600">着順をクリア</button>
+          </div>
         </div>
       )}
 
