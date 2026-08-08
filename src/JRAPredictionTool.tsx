@@ -174,7 +174,23 @@ export default function JRAPredictionTool() {
         const saved = await window.storage.get("jra-saved-races");
         if (saved && saved.value) {
           const items = JSON.parse(saved.value);
-          if (Array.isArray(items)) setSavedRaces(items);
+          if (Array.isArray(items) && items.length) setSavedRaces(items);
+        } else {
+          // First launch on a new origin (e.g. GitHub Pages): restore the bundled
+          // 38-race backup without ever overwriting races already stored there.
+          try {
+            const backupUrl = new URL("JRA-38races-backup.json", document.baseURI).toString();
+            const res = await fetch(backupUrl, { cache: "no-store" });
+            if (res.ok) {
+              const backup = await res.json();
+              if (backup?.type === "jra-ai-full-backup" && Array.isArray(backup.savedRaces) && backup.savedRaces.length) {
+                setSavedRaces(backup.savedRaces);
+                await window.storage.set("jra-saved-races", JSON.stringify(backup.savedRaces));
+              }
+            }
+          } catch (e) {
+            // The app remains usable even if the bundled migration backup is unavailable.
+          }
         }
       } catch (e) {
         // no saved data yet
@@ -1584,12 +1600,18 @@ export default function JRAPredictionTool() {
   const analyzeScreenshots = async () => {
     const entries = Object.entries(scanFiles).filter(([,file])=>file);
     if (!entries.length) { flash("スクリーンショットを1枚以上選んでください"); return; }
-    setScanBusy(true); setScanProgress(1); setScanLog("Azure解析を準備しています…");
+    const onGitHubPages = typeof window !== "undefined" && /\.github\.io$/i.test(window.location.hostname);
+    setScanBusy(true); setScanProgress(1); setScanLog(onGitHubPages ? "端末内OCRを準備しています…" : "Azure解析を準備しています…");
     try {
       let count;
       try {
-        count = await analyzeWithAzure(entries);
-        setScanLog(`${count}頭をAzure OCRで反映しました。読み違いだけ表で修正してください。`);
+        if (onGitHubPages) {
+          count = await analyzeWithLocalOcr(entries);
+          setScanLog(`${count}頭を端末内OCRで反映しました。読み違いだけ表で修正してください。`);
+        } else {
+          count = await analyzeWithAzure(entries);
+          setScanLog(`${count}頭をAzure OCRで反映しました。読み違いだけ表で修正してください。`);
+        }
       } catch (azureError) {
         console.warn("Azure OCR failed; falling back to local OCR", azureError);
         const azureMessage = azureError?.message || "設定を確認してください";
