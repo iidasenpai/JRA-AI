@@ -211,6 +211,76 @@ export default function JRAPredictionTool() {
     setTimeout(() => setStatus(""), 2000);
   };
 
+  const isDeploymentUrl = typeof window !== "undefined" && /-projects\.vercel\.app$/i.test(window.location.hostname);
+
+  const exportFullBackup = () => {
+    const payload = {
+      type: "jra-ai-full-backup",
+      version: "3.5.1",
+      exportedAt: new Date().toISOString(),
+      state: {
+        raceName, track, surface, distance, going, raceClass, paceType,
+        learningOn, learned, historyCount, learningHistory, horses, weights,
+        agariBonus, oddsOn, decayScale, oddsStrength
+      },
+      savedRaces,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `jra-ai-full-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    flash(`全データを書き出しました（${savedRaces.length}レース）`);
+  };
+
+  const importFullBackup = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json,.json";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const data = JSON.parse(String(reader.result || ""));
+          if (data?.type !== "jra-ai-full-backup" || !data?.state || !Array.isArray(data?.savedRaces)) {
+            throw new Error("JRA-AIの全データバックアップではありません");
+          }
+          const st = data.state;
+          if (st.raceName !== undefined) setRaceName(st.raceName);
+          if (st.track) setTrack(st.track);
+          if (st.surface) setSurface(st.surface);
+          if (st.distance !== undefined) setDistance(st.distance);
+          if (st.going) setGoing(st.going);
+          if (st.raceClass) setRaceClass(st.raceClass);
+          if (st.paceType) setPaceType(st.paceType);
+          if (st.learningOn !== undefined) setLearningOn(st.learningOn);
+          if (st.learned) setLearned((prev) => ({ ...prev, ...st.learned }));
+          if (st.historyCount !== undefined) setHistoryCount(st.historyCount);
+          if (Array.isArray(st.learningHistory)) setLearningHistory(st.learningHistory);
+          if (Array.isArray(st.horses)) setHorses(st.horses);
+          if (st.weights) setWeights(st.weights);
+          if (st.agariBonus !== undefined) setAgariBonus(st.agariBonus);
+          if (st.oddsOn !== undefined) setOddsOn(st.oddsOn);
+          if (st.decayScale !== undefined) setDecayScale(st.decayScale);
+          if (st.oddsStrength !== undefined) setOddsStrength(st.oddsStrength);
+          setSavedRaces(data.savedRaces);
+          await window.storage.set("jra-tool-state", JSON.stringify(st));
+          await window.storage.set("jra-saved-races", JSON.stringify(data.savedRaces));
+          setSavedRacesOpen(true);
+          flash(`全データを復元しました（${data.savedRaces.length}レース）`);
+        } catch (e) {
+          alert(`復元できませんでした: ${e instanceof Error ? e.message : "ファイル形式エラー"}`);
+        }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  };
+
   // ---- 行操作 ----
   const addHorse = () => setHorses((h) => [...h, { ...emptyHorse(), umaban: h.length + 1 }]);
   const removeHorse = (id) => setHorses((h) => h.filter((x) => x.id !== id));
@@ -2137,6 +2207,13 @@ export default function JRAPredictionTool() {
         {status && <span className="text-xs bg-green-600 px-2 py-1 rounded">{status}</span>}
       </div>
 
+      {isDeploymentUrl && (
+        <div className="mx-3 mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs leading-relaxed text-amber-900">
+          <div className="font-black">⚠ このURLはDeployment固有URLです</div>
+          <div className="mt-1">保存データはURLごとに別になります。普段は固定のProductionドメインから開いてください。古いDeploymentのデータは、その古いURLを開いて「全データ保存」→固定URLで「全データ読込」で移せます。</div>
+        </div>
+      )}
+
       {/* レース情報 */}
       <div className="bg-white mx-3 mt-3 rounded-lg shadow-sm border border-gray-200 p-3">
         <div className="grid grid-cols-2 gap-2 mb-2">
@@ -2356,6 +2433,8 @@ export default function JRAPredictionTool() {
           </>
         )}
         <button onClick={() => setSavedRacesOpen((v) => !v)} className="bg-slate-800 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">保存済みレース {savedRaces.length ? `(${savedRaces.length})` : ""}</button>
+        <button onClick={exportFullBackup} className="bg-indigo-700 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">全データ保存</button>
+        <button onClick={importFullBackup} className="bg-white border border-indigo-300 text-indigo-700 text-xs font-bold px-3 py-2 rounded shadow-sm">全データ読込</button>
         {horses.length > 0 && (
           <button onClick={clearAll} className="bg-white border border-red-300 text-red-500 text-xs font-bold px-3 py-2 rounded shadow-sm ml-auto">全削除</button>
         )}
