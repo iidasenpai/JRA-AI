@@ -98,6 +98,17 @@ const num = (v) => {
   return Number.isNaN(n) ? null : n;
 };
 
+// 馬体重欄は「524(+4)」のような表記。補正に使うのは524kgではなく増減の+4。
+const bodyChangeNum = (v) => {
+  if (v === "" || v === null || v === undefined) return null;
+  const text = String(v).trim();
+  const m = text.match(/\(([+-]?\d+)\)/);
+  if (m) return Number(m[1]);
+  const m2 = text.match(/^[+-]?\d+$/);
+  if (m2) return Number(text);
+  return null;
+};
+
 function cellClass(v) {
   if (v === null) return "bg-white text-gray-400";
   if (v >= 110) return "bg-orange-500 text-white font-bold";
@@ -217,7 +228,9 @@ export default function JRAPredictionTool() {
     const t = setTimeout(async () => {
       try {
         await window.storage.set("jra-saved-races", JSON.stringify(savedRaces));
-      } catch (e) {}
+      } catch (e) {
+        setStatus("保存に失敗しました。全データ保存でバックアップしてください");
+      }
     }, 250);
     return () => clearTimeout(t);
   }, [loaded, savedRaces]);
@@ -232,7 +245,7 @@ export default function JRAPredictionTool() {
   const exportFullBackup = () => {
     const payload = {
       type: "jra-ai-full-backup",
-      version: "3.5.1",
+      version: "3.6.0",
       exportedAt: new Date().toISOString(),
       state: {
         raceName, track, surface, distance, going, raceClass, paceType,
@@ -1524,8 +1537,18 @@ export default function JRAPredictionTool() {
       }
       // 距離・コース指数は結合セル誤認識が多いため、確実な専用入力がある時だけ手動補完する。
     });
-    // 表認識に成功した場合はセル値を正とし、座標OCRで空欄を無理に埋めない。
-    // オッズ・人気・斤量を指数列へ誤配置する事故を防ぐ。
+    // 表認識で一部の馬だけ空欄になった場合は、座標OCRの同じ馬番から「空欄だけ」を補完する。
+    // 既に表から取れた値は上書きしないため、オッズ・斤量などの誤配置リスクを抑える。
+    const spatial = mergeAzureIndexSpatial(payload, list, recentMode);
+    const spatialByNo = new Map(spatial.map((x:any) => [String(x.umaban), x]));
+    const fillKeys = recentMode ? ["best","start","oikake","agari","avg5","r3","r2","r1"] : ["best","start","oikake","agari","avg5"];
+    list.forEach((h:any) => {
+      const src:any = spatialByNo.get(String(h.umaban));
+      if (!src) return;
+      fillKeys.forEach((key) => {
+        if ((h[key] === "" || h[key] === null || h[key] === undefined) && src[key] !== "" && src[key] !== null && src[key] !== undefined) h[key] = src[key];
+      });
+    });
     return list.sort((a, b) => Number(a.umaban || 99) - Number(b.umaban || 99));
   };
 
@@ -1711,7 +1734,7 @@ export default function JRAPredictionTool() {
       _classFit: num(h.classFit),
       _jockeyIndex: num(h.jockeyIndex),
       _gateFit: num(h.gateFit),
-      _bodyChange: num(h.bodyChange),
+      _bodyChange: bodyChangeNum(h.bodyChange),
       _pedigreeFit: num(h.pedigreeFit),
       _condition: num(h.condition),
     }));
@@ -2620,6 +2643,7 @@ export default function JRAPredictionTool() {
                           value={h[f]}
                           onChange={(e) => updateHorse(h.id, f, e.target.value)}
                           className="w-10 text-center bg-transparent border-none font-bold"
+                          placeholder="未"
                         />
                       </td>
                     ))}
@@ -2632,7 +2656,7 @@ export default function JRAPredictionTool() {
                     <td className={cellBase}><select value={h.runningStyle || "先"} onChange={(e)=>updateHorse(h.id,"runningStyle",e.target.value)} className="bg-transparent text-xs">{RUNNING_STYLES.map(x=><option key={x}>{x}</option>)}</select></td>
                     <td className={cellBase}><select value={h.training || "B"} onChange={(e)=>updateHorse(h.id,"training",e.target.value)} className="bg-transparent text-xs">{["S","A","B","C","D"].map(x=><option key={x}>{x}</option>)}</select></td>
                     {[["groundFit","馬場"],["classFit","級"],["jockeyIndex","騎"],["gateFit","枠"],["bodyChange","増減"],["pedigreeFit","血"],["condition","状"]].map(([f,p]) => (
-                      <td key={f} className={cellBase}><input value={h[f] ?? ""} onChange={(e)=>updateHorse(h.id,f,e.target.value)} className="w-10 text-center border-none bg-transparent" placeholder={p}/></td>
+                      <td key={f} className={cellBase}><input value={h[f] ?? ""} onChange={(e)=>updateHorse(h.id,f,e.target.value)} className="w-10 text-center border-none bg-transparent" placeholder="未" title={`${p}: 元データがない場合は未入力（総合指数では中立扱い）`}/></td>
                     ))}
                     
                     <td className={`${cellBase} font-black text-base ${h._rank === 1 ? "text-red-600" : h._rank === 2 ? "text-blue-600" : "text-gray-700"}`}>
