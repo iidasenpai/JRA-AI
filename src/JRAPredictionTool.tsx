@@ -109,6 +109,43 @@ const bodyChangeNum = (v) => {
   return null;
 };
 
+// 元データがない補助項目は「実データ」と混同しないよう中立値で補完する。
+// 実測値・コメントから読み取れる情報はそれを優先し、推測できない項目は50（馬体増減は0）とする。
+// これにより欠損のせいで総合指数の一部が丸ごと無効になることを防ぐ。
+const autoCompleteHorseFactors = (horse, race = {}) => {
+  const h = { ...horse };
+  const comment = String(h.comment || "");
+  const setIfBlank = (key, value) => {
+    if (h[key] === "" || h[key] === null || h[key] === undefined) h[key] = String(value);
+  };
+
+  // 厩舎コメントから明確に読み取れる適性・状態は中立値より優先。
+  if (num(h.condition) === null && comment) h.condition = String(scoreCommentText(comment));
+  if (num(h.groundFit) === null && /(?:芝|洋芝|良馬場|稍重|重馬場|不良|ダート).*(?:合う|対応|問題ない|適性|向く)/.test(comment)) {
+    h.groundFit = "56";
+  }
+  if (num(h.classFit) === null && /(?:昇級|クラス|条件|距離).*(?:問題ない|対応|通用|合う|適性|期待|好材料)/.test(comment)) {
+    h.classFit = "56";
+  }
+
+  // 外部の適性指数が未入力なら中立値。これは「実績50」ではなく自動補完値。
+  setIfBlank("groundFit", 50);
+  setIfBlank("classFit", 50);
+  setIfBlank("jockeyIndex", 50);
+  setIfBlank("gateFit", 50);
+  setIfBlank("pedigreeFit", 50);
+  setIfBlank("condition", 50);
+  setIfBlank("bodyChange", 0);
+
+  // 斤量から極端な異常値を防ぐ（実測値そのものは変更しない）。
+  if (h.weight !== "" && h.weight !== null && h.weight !== undefined) {
+    const w = num(h.weight);
+    if (w !== null && (w < 40 || w > 70)) h.weight = "";
+  }
+  h._autoCompleted = true;
+  return h;
+};
+
 function cellClass(v) {
   if (v === null) return "bg-white text-gray-400";
   if (v >= 110) return "bg-orange-500 text-white font-bold";
@@ -185,7 +222,15 @@ export default function JRAPredictionTool() {
         const saved = await window.storage.get("jra-saved-races");
         if (saved && saved.value) {
           const items = JSON.parse(saved.value);
-          if (Array.isArray(items) && items.length) setSavedRaces(items);
+          if (Array.isArray(items) && items.length) {
+            const normalized = items.map((race) => ({
+              ...race,
+              horses: Array.isArray(race?.horses)
+                ? race.horses.map((h) => autoCompleteHorseFactors(h, race))
+                : [],
+            }));
+            setSavedRaces(normalized);
+          }
         } else {
           // First launch on a new origin (e.g. GitHub Pages): restore the bundled
           // 38-race backup without ever overwriting races already stored there.
@@ -195,8 +240,14 @@ export default function JRAPredictionTool() {
             if (res.ok) {
               const backup = await res.json();
               if (backup?.type === "jra-ai-full-backup" && Array.isArray(backup.savedRaces) && backup.savedRaces.length) {
-                setSavedRaces(backup.savedRaces);
-                await window.storage.set("jra-saved-races", JSON.stringify(backup.savedRaces));
+                const normalized = backup.savedRaces.map((race) => ({
+                  ...race,
+                  horses: Array.isArray(race?.horses)
+                    ? race.horses.map((h) => autoCompleteHorseFactors(h, race))
+                    : [],
+                }));
+                setSavedRaces(normalized);
+                await window.storage.set("jra-saved-races", JSON.stringify(normalized));
               }
             }
           } catch (e) {
@@ -245,7 +296,7 @@ export default function JRAPredictionTool() {
   const exportFullBackup = () => {
     const payload = {
       type: "jra-ai-full-backup",
-      version: "3.6.0",
+      version: "3.7.0",
       exportedAt: new Date().toISOString(),
       state: {
         raceName, track, surface, distance, going, raceClass, paceType,
@@ -315,6 +366,11 @@ export default function JRAPredictionTool() {
   const removeHorse = (id) => setHorses((h) => h.filter((x) => x.id !== id));
   const updateHorse = (id, field, value) =>
     setHorses((h) => h.map((x) => (x.id === id ? { ...x, [field]: value } : x)));
+
+  const autoCompleteCurrentHorses = () => {
+    setHorses((prev) => prev.map((h) => autoCompleteHorseFactors(h, { track, surface, distance, raceClass })));
+    flash("不足項目を中立値で自動補完しました（実データがある項目は保持）");
+  };
   const clearAll = () => {
     if (confirm("全ての出走馬データを削除します。よろしいですか？")) {
       setHorses([]);
@@ -412,7 +468,7 @@ export default function JRAPredictionTool() {
     }
     // 馬番の重複や桁崩れがないか軽くチェックして順に並べる
     parsed.sort((a, b) => Number(a.umaban || 0) - Number(b.umaban || 0));
-    setHorses(parsed);
+    setHorses(parsed.map((h) => autoCompleteHorseFactors(h, { track, surface, distance, raceClass })));
     setBulkText("");
     setImportOpen(false);
     flash(`${parsed.length}頭を取り込みました`);
@@ -522,11 +578,18 @@ export default function JRAPredictionTool() {
         if (pop) h.ninki = pop[1];
       }
 
-      const body = bodyLine.match(/(?:^|\s)(\d{3})(?:\s|$)/) || changeLine.match(/^(\d{3})$/);
-      const change = [bodyLine, changeLine].map((v) => v.match(/^\(([+-]?\d+)\)$/)).find(Boolean);
-      if (body) h.bodyChange = change ? `${body[1]}(${change[1]})` : body[1];
+      // 「524(+4)」「524kg(+4)」「馬体重 524(+4)」などを許容し、保存するのは増減値だけ。
+      const bodyText = `${info} ${oddsLine} ${bodyLine} ${changeLine}`;
+      const bodyChangeMatch = bodyText.match(/(?:馬体重\\s*)?\d{3}\\s*kg?\\s*\\(([+-]?\d+)\\)/i)
+        || bodyText.match(/\b\d{3}\\s*\\(([+-]?\d+)\\)/);
+      const signedChange = bodyChangeMatch?.[1];
+      if (signedChange !== undefined) h.bodyChange = Number(signedChange) > 0 ? `+${Number(signedChange)}` : String(Number(signedChange));
+      else {
+        const standaloneChange = bodyText.match(/(?:馬体重|増減)[^+\-0-9]*([+\-]\d{1,2})/);
+        if (standaloneChange) h.bodyChange = standaloneChange[1];
+      }
     }
-    return list.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
+    return list.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99)).map((h)=>autoCompleteHorseFactors(h, { track, surface, distance, raceClass }));
   };
 
   const parseIndexText = (text, baseList, recentMode = false) => {
@@ -560,7 +623,7 @@ export default function JRAPredictionTool() {
         h.odds = cols[sexIdx + 3] || h.odds;
         h.ninki = cols[sexIdx + 4] || h.ninki;
       }
-      return list.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
+      return list.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99)).map((h)=>autoCompleteHorseFactors(h, { track, surface, distance, raceClass }));
     }
 
     // 近5走は各馬ブロック末尾の「4指数 オッズ 人気」を使用する。
@@ -592,7 +655,7 @@ export default function JRAPredictionTool() {
       if (parts[5]) h.ninki = parts[5];
       i = end - 1;
     }
-    return list.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99));
+    return list.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99)).map((h)=>autoCompleteHorseFactors(h, { track, surface, distance, raceClass }));
   };
 
   const commentScore = (comment) => {
@@ -632,7 +695,7 @@ export default function JRAPredictionTool() {
       if (/距離短縮.*(?:期待|合う|プラス)|短縮.*好材料/.test(h.comment)) h.classFit = String(Math.max(num(h.classFit)||50, 56));
       if (/芝.*(?:合う|問題ない)|ダート.*(?:合う|問題ない)/.test(h.comment)) h.groundFit = String(Math.max(num(h.groundFit)||50, 56));
     }
-    return list;
+    return list.map((h)=>autoCompleteHorseFactors(h, { track, surface, distance, raceClass }));
   };
 
 
@@ -753,7 +816,7 @@ export default function JRAPredictionTool() {
         if (horse) { horse.training = grade; horse.trainingScore = String(GRADE_TO_TRAINING_100[grade] ?? 70); }
       }
     }
-    return list;
+    return list.map((h)=>autoCompleteHorseFactors(h, { track, surface, distance, raceClass }));
   };
 
   const parsePaceText = (text) => {
@@ -1190,7 +1253,7 @@ export default function JRAPredictionTool() {
   };
 
   const sanitizeHorseRecord = (horse) => {
-    const h = { ...horse };
+    const h = autoCompleteHorseFactors({ ...horse }, { track, surface, distance, raceClass });
     const cleaned = cleanHorseName(h.name);
     h.name = cleaned || nameFromComment(h.comment);
     const pop = Number(String(h.ninki ?? "").trim());
@@ -2469,6 +2532,9 @@ export default function JRAPredictionTool() {
         <button onClick={addHorse} className="bg-blue-700 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">＋ 1頭追加</button>
         <button onClick={() => setImportOpen((v) => !v)} className="bg-white border border-gray-300 text-xs font-bold px-3 py-2 rounded shadow-sm">一括貼り付け</button>
         <button onClick={doExport} className="bg-white border border-gray-300 text-xs font-bold px-3 py-2 rounded shadow-sm">JSON書き出し</button>
+        {!resultEntryMode && (
+          <button onClick={autoCompleteCurrentHorses} className="bg-slate-600 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">不足項目を補完</button>
+        )}
         {!resultEntryMode ? (
           <button onClick={saveRaceForLater} className="bg-emerald-600 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">レースを保存</button>
         ) : (
@@ -2680,6 +2746,7 @@ export default function JRAPredictionTool() {
       </div>
 
       <div className="mx-3 mt-2 text-xs text-gray-400 leading-relaxed">
+        <div>※不足項目は「不足項目を補完」で中立値（適性50・馬体増減0）を自動入力できます。実データがある項目は上書きしません。</div>
         ※総合指数 = タイム4軸 ＋ 近走トレンド ＋ スタート/追走/上がり ＋ 展開・調教・馬場・クラス・騎手・枠・馬体重・血統・状態補正
         {surface === "芝" && agariBonus ? " ＋ 上がり補正" : ""}
         {oddsOn ? " ＋ 市場人気補正（低オッズを弱く加点・上限あり）" : ""}。
