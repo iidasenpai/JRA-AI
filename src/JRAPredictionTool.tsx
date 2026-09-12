@@ -86,6 +86,15 @@ const emptyHorse = () => ({
   odds: "",
   ninki: "",
   runningStyle: "先",
+  styleSource: "",
+  cornerAvg: "",
+  restWeeks: "",
+  paddockGrade: "",
+  paddockNote: "",
+  detailImported: false,
+  detailDistanceFit: "",
+  detailCourseFit: "",
+  detailGroundFit: "",
   training: "B",
   trainingScore: "", // 調教100点
   trainingNote: "",
@@ -260,7 +269,7 @@ export default function JRAPredictionTool() {
   const [scanOpen, setScanOpen] = useState(true);
   const [scanFiles, setScanFiles] = useState({ race: null, standard: null, recent: null, pace: null, comment: null });
   const [scanPreview, setScanPreview] = useState({});
-  const [scanText, setScanText] = useState({ race: "", standard: "", recent: "", pace: "", comment: "", training: "" });
+  const [scanText, setScanText] = useState({ race: "", standard: "", recent: "", pace: "", comment: "", training: "", details: "" });
   const [azureDebug, setAzureDebug] = useState({});
   const [azureLastError, setAzureLastError] = useState("");
   const [scanProgress, setScanProgress] = useState(0);
@@ -377,7 +386,7 @@ export default function JRAPredictionTool() {
   const exportFullBackup = () => {
     const payload = {
       type: "jra-ai-full-backup",
-      version: "3.8.0",
+      version: "3.9.0",
       exportedAt: new Date().toISOString(),
       state: {
         raceName, track, surface, distance, going, raceClass, paceType,
@@ -567,6 +576,7 @@ export default function JRAPredictionTool() {
     ["pace", "AI展開予測", "ペース・推定タイム・前後半3F"],
     ["comment", "厩舎コメント", "状態・距離短縮・適性コメント"],
     ["training", "調教評価", "馬番・馬名・短評・矢印・追い切り時計を含む調教全文"],
+    ["details", "出馬表（詳細）", "脚質・近5走通過順・距離/コース/道悪実績・馬体増減・騎手コンビ・休養・パドック"],
   ];
 
   const selectScanFile = (type, file) => {
@@ -675,6 +685,137 @@ export default function JRAPredictionTool() {
       }
     }
     return list.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99)).map((h)=>autoCompleteHorseFactors(h, { track, surface, distance, raceClass }));
+  };
+
+
+  const performanceFitScore = (wins:number, seconds:number, thirds:number, others:number) => {
+    const total = wins + seconds + thirds + others;
+    if (!total) return 50;
+    // 小標本を50へ縮めた実績指数。1戦だけの1着などを過大評価しない。
+    const weighted = wins + seconds * 0.66 + thirds * 0.40;
+    const raw = weighted / total;
+    const shrink = total / (total + 5);
+    return Math.round(clamp(50 + (raw - 0.25) * 42 * shrink, 35, 72));
+  };
+
+  const parseDetailRaceText = (text, baseList) => {
+    const lines = String(text || "")
+      .replace(/\r/g, "")
+      .split("\n")
+      .map((x) => x.replace(/[\t\u3000]+/g, " ").replace(/ {2,}/g, " ").trim())
+      .filter(Boolean);
+    const list = baseList.map((h)=>({ ...h }));
+
+    const headers:any[] = [];
+    for (let i=0;i<lines.length-2;i++) {
+      if (!/^\d{1,2}$/.test(lines[i])) continue;
+      const n = Number(lines[i]);
+      const name = lines[i+1] || "";
+      if (n < 1 || n > 18 || !name || /^\d/.test(name)) continue;
+      if ((lines[i+2] || "").includes(`${name}のデータベース`)) headers.push({ i, umaban:String(n), name });
+    }
+    if (!headers.length) return list.map((h)=>autoCompleteHorseFactors(h, { track, surface, distance, raceClass }));
+
+    const surfShort = surface === "芝" ? "芝" : "ダ";
+    const currentDist = String(distance || "").replace(/\D/g, "");
+    const currentGoing = String(going || "");
+
+    const statsScoreFromLine = (block:string[], re:RegExp) => {
+      const line = block.find((x)=>re.test(x));
+      if (!line) return null;
+      const nums = line.match(/(?:^|\s)(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$/);
+      if (!nums) return null;
+      return performanceFitScore(Number(nums[1]),Number(nums[2]),Number(nums[3]),Number(nums[4]));
+    };
+
+    headers.forEach((head, idx)=>{
+      const end = idx+1 < headers.length ? headers[idx+1].i : lines.length;
+      const block = lines.slice(head.i, end);
+      let h = list.find((x)=>String(x.umaban)===head.umaban) || findHorse(head.name, list);
+      if (!h) { h = { ...emptyHorse(), umaban:head.umaban, name:head.name }; list.push(h); }
+      h.umaban = head.umaban; h.name = head.name; h.detailImported = true;
+
+      // 「差中1週」「先中2週」「逃中7週」から公式表示の脚質を最優先で採用。
+      const styleLine = block.find((x)=>/^(逃|先|差|追)中\d+週$/.test(x));
+      if (styleLine) {
+        const m = styleLine.match(/^(逃|先|差|追)中(\d+)週$/);
+        if (m) { h.runningStyle=m[1]; h.styleSource="詳細出馬表"; h.restWeeks=m[2]; }
+      }
+
+      // 馬体重と増減。
+      const bodyLine = block.find((x)=>/^\d{3}kg\s*\([+\-]?\d+\)$/.test(x));
+      if (bodyLine) {
+        const m = bodyLine.match(/^\d{3}kg\s*\(([+\-]?\d+)\)$/);
+        if (m) h.bodyChange = Number(m[1]) > 0 ? `+${Number(m[1])}` : String(Number(m[1]));
+      }
+
+      // オッズ・人気。
+      const opLine = block.find((x)=>/^\d+(?:\.\d+)?\s*\(\d+人気\)$/.test(x));
+      if (opLine) {
+        const m=opLine.match(/^(\d+(?:\.\d+)?)\s*\((\d+)人気\)$/);
+        if (m) { h.odds=m[1]; h.ninki=m[2]; }
+      }
+
+      // 性齢、斤量、現在騎手。
+      const sexLine = block.find((x)=>/^(牡|牝|セ)\d+/.test(x));
+      if (sexLine) { const m=sexLine.match(/^(牡|牝|セ)(\d+)/); if(m) h.sex=`${m[1]}${m[2]}`; }
+      const weightIdx = block.findIndex((x)=>/^[☆◇▲△★]?\d{2}(?:\.\d)$/.test(x));
+      if (weightIdx >= 0) {
+        h.weight = block[weightIdx].replace(/^[☆◇▲△★]/, "");
+        const jCandidates = [block[weightIdx-1] || "", block[weightIdx-2] || "", block[weightIdx-3] || ""];
+        const j = jCandidates.find((x)=>x && !/初騎乗|\d+-\d+-\d+-\d+/.test(x) && !/^(牡|牝|セ)\d+/.test(x)) || "";
+        if (j) h.jockey = j.replace(/^替/, "").replace(/^[☆◇▲△★]/, "");
+        const combo = jCandidates.find((x)=>/\d+-\d+-\d+-\d+/.test(x)) || "";
+        const cm = combo.match(/(\d+)-(\d+)-(\d+)-(\d+)/);
+        if (cm) h.jockeyIndex = String(performanceFitScore(+cm[1],+cm[2],+cm[3],+cm[4]));
+      }
+
+      // パドック評価 A/B/C と短評。評価なしなら中立のまま。
+      const gradeIdx = block.findIndex((x)=>/^[ABC]$/.test(x));
+      if (gradeIdx >= 0) {
+        h.paddockGrade = block[gradeIdx];
+        const note = block[gradeIdx+1] || "";
+        if (note && !/^(牡|牝|セ)\d+/.test(note)) h.paddockNote = note;
+        const baseCond = block[gradeIdx] === "A" ? 62 : block[gradeIdx] === "B" ? 56 : 50;
+        h.condition = String(Math.max(num(h.condition) ?? 50, baseCond));
+      }
+
+      // 現条件の実績を距離・コース・道悪指数へ。小標本は50へ縮小。
+      if (currentDist) {
+        const distRe = new RegExp(`^全場${surfShort}${currentDist}m\\s+`);
+        const sc = statsScoreFromLine(block, distRe);
+        if (sc !== null) h.detailDistanceFit = String(sc);
+        const courseRe = new RegExp(`^${track}${surfShort}${currentDist}m\\s+`);
+        const cc = statsScoreFromLine(block, courseRe);
+        if (cc !== null) h.detailCourseFit = String(cc);
+      }
+      if (surface === "ダート" && /稍重|重|不良/.test(currentGoing)) {
+        const gc = statsScoreFromLine(block, /^重不ダ\s+/);
+        if (gc !== null) { h.detailGroundFit = String(gc); h.groundFit = String(gc); }
+      }
+
+      // 近5走の通過順位から補助脚質を作る。公式脚質が無い時だけ採用。
+      const positions:number[] = [];
+      for (const line of block) {
+        const ms = [...line.matchAll(/(?:^|\s|-)(\d{1,2})(?=\s|$)/g)].map((m)=>Number(m[1]));
+        // 4角相当として「前/出」直後の並びや、2〜4個の通過順の末尾を利用。
+        if ((/^(?:出|不)?\s*-/.test(line) || /^\d{1,2}(?:\s+\d{1,2}){1,3}$/.test(line)) && ms.length) {
+          const v=ms[ms.length-1]; if (v>=1 && v<=18) positions.push(v);
+        }
+      }
+      if (positions.length) {
+        const recent = positions.slice(0,5);
+        const avg = recent.reduce((a,b)=>a+b,0)/recent.length;
+        h.cornerAvg = avg.toFixed(1);
+        if (!styleLine) {
+          h.runningStyle = avg <= 2.2 ? "逃" : avg <= 5.0 ? "先" : avg <= 10.0 ? "差" : "追";
+          h.styleSource = "近走通過順";
+        }
+      }
+    });
+
+    return list.sort((a,b)=>Number(a.umaban||99)-Number(b.umaban||99))
+      .map((h)=>autoCompleteHorseFactors(h, { track, surface, distance, raceClass }));
   };
 
   const parseIndexText = (text, baseList, recentMode = false) => {
@@ -1887,6 +2028,9 @@ export default function JRAPredictionTool() {
       _bodyChange: bodyChangeNum(h.bodyChange),
       _pedigreeFit: num(h.pedigreeFit),
       _condition: num(h.condition),
+      _detailDistanceFit: num(h.detailDistanceFit),
+      _detailCourseFit: num(h.detailCourseFit),
+      _detailGroundFit: num(h.detailGroundFit),
     }));
 
     const avgOf = (key) => {
@@ -1991,6 +2135,10 @@ export default function JRAPredictionTool() {
       const gateAdj = fitAdj(h._gateFit, 25, "gate");
       const pedigreeAdj = fitAdj(h._pedigreeFit, 28, "pedigree");
       const conditionAdj = h._condition === null ? 0 : clamp((h._condition - 50) / 22, -2.2, 2.2) * effectiveConditionLearn;
+      // 詳細出馬表の実績はタイム指数とは別物。小標本補正済みの適性値として弱く加点する。
+      const detailDistanceAdj = h._detailDistanceFit === null ? 0 : clamp((h._detailDistanceFit - 50) / 10, -1.2, 1.6);
+      const detailCourseAdj = h._detailCourseFit === null ? 0 : clamp((h._detailCourseFit - 50) / 10, -1.0, 1.4);
+      const detailGroundAdj = h._detailGroundFit === null ? 0 : clamp((h._detailGroundFit - 50) / 12, -0.8, 1.0);
       let bodyAdj = 0;
       if (h._bodyChange !== null) {
         const abs = Math.abs(h._bodyChange);
@@ -2007,7 +2155,7 @@ export default function JRAPredictionTool() {
       const marketSafetyAdj = popularity === null ? 0 : clamp((4 - popularity) * marketCoef, -2.0, 1.25);
 
       // 誤コメントの影響を増幅しないよう、学習済み係数にも実効上限を設ける。
-      const contextAdj = clamp(trainingAdj + commentAdj + styleAdj + groundAdj + classAdj + jockeyAdj + gateAdj + pedigreeAdj + conditionAdj + bodyAdj, -15, 15);
+      const contextAdj = clamp(trainingAdj + commentAdj + styleAdj + groundAdj + classAdj + jockeyAdj + gateAdj + pedigreeAdj + conditionAdj + detailDistanceAdj + detailCourseAdj + detailGroundAdj + bodyAdj, -15, 15);
 
       const finalScore = score !== null ? score + oddsBonus + contextAdj : null;
       const selectionScore = finalScore !== null ? finalScore + marketSafetyAdj : null;
@@ -2645,7 +2793,7 @@ export default function JRAPredictionTool() {
               <div className="text-xs font-black text-gray-800">{label}</div>
               <div className="mb-1 mt-0.5 text-[10px] text-gray-500">{desc}</div>
               <textarea
-                rows={type === "comment" ? 8 : 6}
+                rows={type === "details" ? 12 : type === "comment" ? 8 : 6}
                 value={scanText[type]}
                 onChange={(e)=>setScanText((v)=>({...v,[type]:e.target.value}))}
                 placeholder={`${label}のテキストを貼り付け`}
@@ -2656,18 +2804,23 @@ export default function JRAPredictionTool() {
           <div className="mt-3 flex flex-wrap gap-2">
             <button onClick={()=>{
               let next=scanText.race ? [] : horses.map(h=>({...h}));
-              if(scanText.race) next=parseRaceText(scanText.race,next);
+              if(scanText.race) {
+                next=parseRaceText(scanText.race,next);
+                // 通常の出馬表欄へ詳細版を貼った場合も自動で拾う。
+                next=parseDetailRaceText(scanText.race,next);
+              }
               if(scanText.standard) next=parseIndexText(scanText.standard,next,false);
               if(scanText.recent) next=parseIndexText(scanText.recent,next,true);
               if(scanText.pace) parsePaceText(scanText.pace);
               if(scanText.comment) next=parseCommentText(scanText.comment,next);
               if(scanText.training) next=parseTrainingText(scanText.training,next);
+              if(scanText.details) next=parseDetailRaceText(scanText.details,next);
               setHorses(next);
               flash(`${next.filter((h)=>h.name && h.umaban).length}頭へテキストを反映しました`);
             }} className="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-black text-white shadow">テキストを一括反映</button>
-            <button onClick={()=>setScanText({race:"",standard:"",recent:"",pace:"",comment:"",training:""})} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-bold text-gray-600">入力欄をクリア</button>
+            <button onClick={()=>setScanText({race:"",standard:"",recent:"",pace:"",comment:"",training:"",details:""})} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-bold text-gray-600">入力欄をクリア</button>
           </div>
-          <div className="mt-2 text-[10px] leading-relaxed text-gray-500">入力できない欄は空のままでOKです。取り込み後は下の表で読み違いだけ修正してください。</div>
+          <div className="mt-2 text-[10px] leading-relaxed text-gray-500">入力できない欄は空のままでOKです。「出馬表（詳細）」では、脚質・近5走通過順・当該距離/コース/道悪実績・馬体増減・騎手コンビ・休養・パドックを自動抽出します。実績指数は小標本を50へ縮め、1戦だけの好走を過大評価しません。</div>
         </div>}
       </div>
 
