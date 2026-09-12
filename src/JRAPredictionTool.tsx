@@ -1,20 +1,43 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 
-// ---- JRA 8枠カラー ----
+// ---- JRA公式に合わせた8枠カラー / 枠割り ----
+// 1白・2黒・3赤・4青・5黄・6緑・7橙・8桃
 const WAKU_COLORS = {
-  1: { bg: "#FFFFFF", text: "#111111", border: "#111111" },
+  1: { bg: "#FFFFFF", text: "#111111", border: "#777777" },
   2: { bg: "#111111", text: "#FFFFFF", border: "#111111" },
-  3: { bg: "#D0342C", text: "#FFFFFF", border: "#D0342C" },
-  4: { bg: "#1E5FBF", text: "#FFFFFF", border: "#1E5FBF" },
-  5: { bg: "#F2C11B", text: "#111111", border: "#F2C11B" },
-  6: { bg: "#2E8B4E", text: "#FFFFFF", border: "#2E8B4E" },
-  7: { bg: "#E07B1E", text: "#FFFFFF", border: "#E07B1E" },
-  8: { bg: "#E77FB3", text: "#111111", border: "#E77FB3" },
+  3: { bg: "#E60012", text: "#FFFFFF", border: "#E60012" },
+  4: { bg: "#2878D0", text: "#FFFFFF", border: "#2878D0" },
+  5: { bg: "#FFE100", text: "#111111", border: "#D5BD00" },
+  6: { bg: "#00A650", text: "#FFFFFF", border: "#008C43" },
+  7: { bg: "#F39800", text: "#111111", border: "#D98200" },
+  8: { bg: "#EE72D8", text: "#111111", border: "#D65FC2" },
 };
-const wakuOf = (umaban) => {
+
+// JRAの枠番は馬番の8周期ではない。頭数に応じて外枠側から2頭枠・3頭枠になる。
+// 9〜15頭: 8枠から内へ2頭枠 / 16頭: 全枠2頭 / 17頭: 8枠3頭 / 18頭: 7・8枠3頭。
+const wakuOf = (umaban, totalStarters = 18) => {
   const n = Number(umaban);
-  if (!Number.isFinite(n)) return null;
-  return (((n - 1) % 8) + 8) % 8 + 1;
+  const total = Math.max(1, Math.min(18, Number(totalStarters) || 18));
+  if (!Number.isFinite(n) || n < 1 || n > total) return null;
+  let counts;
+  if (total <= 8) {
+    counts = Array.from({ length: 8 }, (_, i) => (i < total ? 1 : 0));
+  } else if (total <= 15) {
+    const singles = 16 - total;
+    counts = Array.from({ length: 8 }, (_, i) => (i < singles ? 1 : 2));
+  } else if (total === 16) {
+    counts = Array(8).fill(2);
+  } else if (total === 17) {
+    counts = [2,2,2,2,2,2,2,3];
+  } else {
+    counts = [2,2,2,2,2,2,3,3];
+  }
+  let end = 0;
+  for (let i = 0; i < 8; i += 1) {
+    end += counts[i];
+    if (n <= end) return i + 1;
+  }
+  return 8;
 };
 
 const JRA_TRACKS = ["札幌", "函館", "福島", "新潟", "東京", "中山", "中京", "京都", "阪神", "小倉"];
@@ -2493,9 +2516,14 @@ export default function JRAPredictionTool() {
     }
     setSavedRacesOpen(false);
     if (forResult) {
-      setTimeout(() => {
-        document.getElementById("result-entry-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 80);
+      // Reactの描画完了を待ってから、結果入力欄へ確実に移動して入力欄へフォーカス。
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          const panel = document.getElementById("result-entry-panel");
+          panel?.scrollIntoView({ behavior: "smooth", block: "start" });
+          setTimeout(() => document.getElementById("result-order-input")?.focus({ preventScroll: true }), 350);
+        }, 180);
+      });
     } else {
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -2811,7 +2839,7 @@ export default function JRAPredictionTool() {
         <table className="min-w-full border-collapse">
           <thead>
             <tr className="bg-gray-50">
-              <th className={colHeaderCls}>枠/馬番</th>
+              <th className={colHeaderCls}>枠 / 馬番</th>
               <th className={colHeaderCls}>印</th>
               <th className={colHeaderCls}>馬名</th>
               <th className={colHeaderCls}>性齢</th>
@@ -2847,15 +2875,24 @@ export default function JRAPredictionTool() {
               .slice()
               .sort((a, b) => Number(a.umaban || 0) - Number(b.umaban || 0))
               .map((h) => {
-                const waku = h.umaban && !Number.isNaN(Number(h.umaban)) ? wakuOf(h.umaban) : null;
+                const totalStarters = Math.max(...ranked.map((x:any)=>Number(x.umaban)||0), ranked.length || 0);
+                const waku = h.umaban && !Number.isNaN(Number(h.umaban)) ? wakuOf(h.umaban, totalStarters) : null;
                 const wc = waku ? WAKU_COLORS[waku] : { bg: "#eee", text: "#999", border: "#ccc" };
                 return (
                   <tr key={h.id} className="hover:bg-gray-50">
                     <td className={cellBase}>
-                      <div className="flex items-center gap-1 justify-center">
+                      <div className="flex items-center justify-center gap-1">
                         <span
-                          className="inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold border"
+                          className="inline-flex h-6 min-w-6 items-center justify-center rounded-[4px] border px-1 text-[10px] font-black shadow-sm"
                           style={{ background: wc.bg, color: wc.text, borderColor: wc.border }}
+                          title={`${waku || "-"}枠`}
+                        >
+                          {waku || "-"}
+                        </span>
+                        <span
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-full border-2 text-xs font-black shadow-sm"
+                          style={{ background: wc.bg, color: wc.text, borderColor: wc.border }}
+                          title={`${h.umaban || "-"}番`}
                         >
                           {h.umaban || "-"}
                         </span>
@@ -2993,6 +3030,7 @@ export default function JRAPredictionTool() {
           <div className="mt-3 rounded-xl border border-amber-200 bg-white p-3">
             <label className="block text-xs font-black text-gray-700">1着-2着-3着</label>
             <input
+              id="result-order-input"
               value={resultOrderInput}
               onChange={(e)=>setResultOrderInput(e.target.value.replace(/[→＞>]/g,"-").replace(/[、,\s]+/g,"-"))}
               inputMode="text"
