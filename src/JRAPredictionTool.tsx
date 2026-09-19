@@ -410,7 +410,7 @@ export default function JRAPredictionTool() {
   const exportFullBackup = () => {
     const payload = {
       type: "jra-ai-full-backup",
-      version: "3.9.0",
+      version: "3.10.2",
       exportedAt: new Date().toISOString(),
       state: {
         raceName, track, surface, distance, going, raceClass, paceType,
@@ -2207,11 +2207,62 @@ export default function JRAPredictionTool() {
     const withScore = computed.filter((h) => h._selectionScore !== null);
     const sorted = [...withScore].sort((a, b) => b._selectionScore - a._selectionScore);
     const rankMap = new Map(sorted.map((h, i) => [h.id, i]));
-    const marks = ["◎", "○", "▲", "△", "△", "☆"];
+
+    // ◎○▲は純粋な上位3頭を維持。今日の検証で弱かった「相手の拾い漏れ」だけを補強する。
+    // 4〜10位から、人気・上がり・近走・距離/コース・前走・調教に裏付けがある馬を
+    // △△☆の候補として再監査する。これにより本命ロジックを壊さずヒモ抜けを減らす。
+    const top3Ids = new Set(sorted.slice(0, 3).map((h) => h.id));
+    const fieldValues = (key) => sorted.map((h) => num(h[key])).filter((v) => v !== null);
+    const percentile = (value, values) => {
+      if (value === null || !values.length) return 0;
+      const below = values.filter((v) => v <= value).length;
+      return below / values.length;
+    };
+    const agariVals = fieldValues("_agari");
+    const avg5Vals = fieldValues("_avg5");
+    const r1Vals = fieldValues("_r1");
+    const distVals = fieldValues("_distVal");
+    const courseVals = fieldValues("_courseVal");
+    const trainingVals = fieldValues("_trainingScore");
+
+    const supportScore = (h) => {
+      const modelRank = (rankMap.get(h.id) ?? 99) + 1;
+      const pop = num(h.ninki);
+      let rescue = 0;
+      // 元順位を土台にしつつ、6〜10位にも逆転余地を持たせる。
+      rescue += Math.max(0, 11 - modelRank) * 1.15;
+      if (pop !== null) {
+        if (pop <= 3) rescue += 5.0;
+        else if (pop <= 5) rescue += 3.0;
+        else if (pop <= 7) rescue += 1.2;
+      }
+      rescue += percentile(num(h._agari), agariVals) * 2.8;
+      rescue += percentile(num(h._avg5), avg5Vals) * 2.4;
+      rescue += percentile(num(h._r1), r1Vals) * 1.8;
+      rescue += percentile(num(h._distVal), distVals) * 1.6;
+      rescue += percentile(num(h._courseVal), courseVals) * 1.4;
+      rescue += percentile(num(h._trainingScore), trainingVals) * 1.4;
+      // 11位以下は救済しない。広げすぎて印の精度を落とすのを防ぐ。
+      if (modelRank > 10) rescue -= 20;
+      return rescue;
+    };
+
+    const support = sorted
+      .filter((h) => !top3Ids.has(h.id))
+      .map((h) => ({ h, rescue: supportScore(h) }))
+      .sort((a, b) => b.rescue - a.rescue || b.h._selectionScore - a.h._selectionScore)
+      .slice(0, 3)
+      .map((x) => x.h);
+    const supportMark = new Map(support.map((h, i) => [h.id, i < 2 ? "△" : "☆"]));
+
     return computed.map((h) => {
       const idx = rankMap.get(h.id);
-      const autoMark = idx !== undefined && idx < marks.length ? marks[idx] : "";
-      return { ...h, _rank: idx !== undefined ? idx + 1 : null, _autoMark: autoMark };
+      let autoMark = "";
+      if (idx === 0) autoMark = "◎";
+      else if (idx === 1) autoMark = "○";
+      else if (idx === 2) autoMark = "▲";
+      else autoMark = supportMark.get(h.id) || "";
+      return { ...h, _rank: idx !== undefined ? idx + 1 : null, _autoMark: autoMark, _supportRescue: supportScore(h) };
     });
   }, [computed]);
 
