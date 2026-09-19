@@ -297,6 +297,7 @@ export default function JRAPredictionTool() {
   const [scanFiles, setScanFiles] = useState({ race: null, standard: null, recent: null, pace: null, comment: null });
   const [scanPreview, setScanPreview] = useState({});
   const [scanText, setScanText] = useState({ race: "", standard: "", recent: "", pace: "", comment: "", training: "", details: "" });
+  const [bodyWeightText, setBodyWeightText] = useState("");
   const [azureDebug, setAzureDebug] = useState({});
   const [azureLastError, setAzureLastError] = useState("");
   const [scanProgress, setScanProgress] = useState(0);
@@ -410,10 +411,68 @@ export default function JRAPredictionTool() {
 
   const isDeploymentUrl = typeof window !== "undefined" && /-projects\.vercel\.app$/i.test(window.location.hostname);
 
+  const applyBodyWeights = () => {
+    const text = String(bodyWeightText || "").replace(/\r/g, "");
+    if (!text.trim()) { flash("馬体重データを貼り付けてください"); return; }
+
+    const found = new Map<string, string>();
+    const normalizeDelta = (raw) => {
+      const d = Number(raw);
+      return d > 0 ? `+${d}` : String(d);
+    };
+
+    // ① JRA等の出馬表コピーをそのまま貼った形式。
+    // 「馬番だけの行」から次の馬番までを1頭のブロックとして扱い、
+    // その中の 476 / (+4) や 476(+4) だけを馬体重として拾う。
+    const blockRe = /(?:^|\n)\s*(\d{1,2})\s*\n([\s\S]*?)(?=\n\s*\d{1,2}\s*\n|$)/g;
+    let blockMatch;
+    while ((blockMatch = blockRe.exec(text))) {
+      const no = String(Number(blockMatch[1]));
+      const block = blockMatch[2];
+      const weight = block.match(/(?:^|\n|\s)(\d{3})\s*(?:kg)?\s*(?:\n\s*)?\(\s*([+\-]?\d{1,2})\s*\)/i);
+      if (weight) found.set(no, normalizeDelta(weight[2]));
+    }
+
+    // ② 1行形式にも対応: 1 482(+6) / 1 馬名 482kg(-4) / 1 482 +6
+    const lines = text.split("\n");
+    for (const raw of lines) {
+      const line = raw.replace(/\u3000/g, " ").trim();
+      const m = line.match(/^\s*(\d{1,2})(?:\s+|[^0-9\n]+).*?(\d{3})\s*(?:kg)?\s*(?:\(\s*([+\-]?\d{1,2})\s*\)|\s+([+\-]\d{1,2}))\s*$/i);
+      if (m) {
+        const no = String(Number(m[1]));
+        const deltaRaw = m[3] ?? m[4];
+        if (deltaRaw !== undefined) found.set(no, normalizeDelta(deltaRaw));
+      }
+    }
+
+    // ③ 改行が崩れたコピーは、現在登録済みの馬名をアンカーにして安全に照合。
+    // オッズや人気は読み取らず、馬体重増減だけ更新する。
+    for (const h of horses) {
+      const no = String(Number(h.umaban));
+      if (found.has(no) || !h.name) continue;
+      const esc = String(h.name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const nameRe = new RegExp(`${esc}[\\s\\S]{0,220}?(\\d{3})\\s*(?:kg)?\\s*(?:\\n\\s*)?\\(\\s*([+\\-]?\\d{1,2})\\s*\\)`, "i");
+      const m = text.match(nameRe);
+      if (m) found.set(no, normalizeDelta(m[2]));
+    }
+
+    if (found.size === 0) { flash("出馬表から馬番と馬体重増減を読み取れませんでした"); return; }
+    let updated = 0;
+    const next = horses.map((h) => {
+      const key = String(Number(h.umaban));
+      if (!found.has(key)) return h;
+      updated += 1;
+      return { ...h, bodyChange: found.get(key) };
+    });
+    setHorses(next);
+    flash(`${updated}頭の馬体重を抽出・反映して再計算しました`);
+    setTimeout(() => scrollToSection("horse-evaluation"), 0);
+  };
+
   const exportFullBackup = () => {
     const payload = {
       type: "jra-ai-full-backup",
-      version: "3.10.3",
+      version: "3.10.5",
       exportedAt: new Date().toISOString(),
       state: {
         raceName, track, surface, distance, going, raceClass, paceType,
@@ -2837,6 +2896,27 @@ export default function JRAPredictionTool() {
           </div>
           <div className="mt-2 text-[10px] leading-relaxed text-gray-500">入力できない欄は空のままでOKです。「出馬表（詳細）」では、脚質・近5走通過順・当該距離/コース/道悪実績・馬体増減・騎手コンビ・休養・パドックを自動抽出します。実績指数は小標本を50へ縮め、1戦だけの好走を過大評価しません。</div>
         </div>}
+      </div>
+
+      <div className="mx-3 mt-3 overflow-hidden rounded-xl border border-sky-200 bg-white shadow-sm">
+        <div className="bg-sky-50 px-4 py-3">
+          <div className="text-sm font-black text-sky-900">⚖️ 馬体重だけ後から反映</div>
+          <div className="mt-0.5 text-[10px] text-sky-700">事前予想後、馬体重発表時に一覧を貼るだけ。増減を反映して全頭を自動再計算します。</div>
+        </div>
+        <div className="p-3">
+          <textarea
+            rows={4}
+            value={bodyWeightText}
+            onChange={(e)=>setBodyWeightText(e.target.value)}
+            placeholder={"JRA等の出馬表をそのまま貼り付けOK\n例: 馬番・馬名・騎手・オッズ・人気・馬体重が混ざった一覧"}
+            className="w-full rounded-lg border border-gray-300 bg-white p-2 text-[11px] font-mono outline-none focus:border-sky-500"
+          />
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button onClick={applyBodyWeights} className="rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-black text-white shadow">馬体重を反映・再計算</button>
+            <button onClick={()=>setBodyWeightText("")} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-bold text-gray-600">クリア</button>
+          </div>
+          <div className="mt-2 text-[10px] leading-relaxed text-gray-500">出馬表をそのまま貼り付けできます。馬番と馬体重・増減だけを自動抽出し、馬名・騎手・オッズ・人気・タイム指数・調教・コメント等は上書きしません。</div>
+        </div>
       </div>
 
       <div className="mx-3 mt-3 rounded-xl border border-gray-200 bg-white p-3 shadow-sm"><div className="mb-2 text-xs font-black text-gray-700">すぐ使う操作</div><div className="flex flex-wrap gap-2">
