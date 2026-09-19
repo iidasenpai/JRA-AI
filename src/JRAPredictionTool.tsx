@@ -118,6 +118,9 @@ const emptyHorse = () => ({
   detailDistanceFit: "",
   detailCourseFit: "",
   detailGroundFit: "",
+  recentSurfaces: [], // 詳細出馬表から取得した近走の芝/ダート（新しい順）
+  surfaceSwitch: "", // 芝→ダート / ダート→芝
+  surfaceRunNo: 0, // 現在の馬場種別で何走目か（1=替わり初戦、2=2戦目）
   training: "B",
   trainingScore: "", // 調教100点
   trainingNote: "",
@@ -410,7 +413,7 @@ export default function JRAPredictionTool() {
   const exportFullBackup = () => {
     const payload = {
       type: "jra-ai-full-backup",
-      version: "3.10.2",
+      version: "3.10.3",
       exportedAt: new Date().toISOString(),
       state: {
         raceName, track, surface, distance, going, raceClass, paceType,
@@ -816,6 +819,35 @@ export default function JRAPredictionTool() {
       if (surface === "ダート" && /稍重|重|不良/.test(currentGoing)) {
         const gc = statsScoreFromLine(block, /^重不ダ\s+/);
         if (gc !== null) { h.detailGroundFit = String(gc); h.groundFit = String(gc); }
+      }
+
+      // 近走の芝/ダートを取得し、芝⇔ダート替わりを自動判定。障害は対象外。
+      // 詳細出馬表の近走レース行だけを使い、集計行は除外する。
+      const recentSurfaces:string[] = [];
+      for (const line of block) {
+        if (/^(?:全場|重不ダ)/.test(line)) continue;
+        const compact = line.replace(/\s+/g, "");
+        // 競馬場名を伴う近走行を優先し、集計値の芝/ダ表記を誤検出しにくくする。
+        const sm = compact.match(/(?:札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉)(芝|ダ(?:ート)?)\d{3,4}m?/);
+        if (sm) recentSurfaces.push(sm[1] === "芝" ? "芝" : "ダート");
+        if (recentSurfaces.length >= 5) break;
+      }
+      h.recentSurfaces = recentSurfaces;
+      h.surfaceSwitch = "";
+      h.surfaceRunNo = 0;
+      if (recentSurfaces.length) {
+        const currentSurface = surface === "芝" ? "芝" : "ダート";
+        const otherSurface = currentSurface === "芝" ? "ダート" : "芝";
+        if (recentSurfaces[0] === otherSurface) {
+          h.surfaceSwitch = `${otherSurface}→${currentSurface}`;
+          h.surfaceRunNo = 1;
+        } else if (recentSurfaces[0] === currentSurface) {
+          const firstOther = recentSurfaces.findIndex((x)=>x===otherSurface);
+          if (firstOther === 1 || firstOther === 2) {
+            h.surfaceSwitch = `${otherSurface}→${currentSurface}`;
+            h.surfaceRunNo = firstOther + 1;
+          }
+        }
       }
 
       // 近5走の通過順位から補助脚質を作る。公式脚質が無い時だけ採用。
@@ -2112,6 +2144,21 @@ export default function JRAPredictionTool() {
         recentAdj = (recentAvg - base) * 0.16 + Math.max(-3, Math.min(3, trend * 0.06));
       }
 
+      // 芝⇔ダート替わり。別馬場で作った近走指数の再現性を少し下げる。
+      // 初戦は不確実性を大きめ、2戦目は弱く、3戦目以降は通常評価へ戻す。
+      // 現条件の距離/コース適性が高ければ減点を縮小し、固定的な「替わり=悪」とはしない。
+      const surfaceRunNo = Number(h.surfaceRunNo || 0);
+      const surfaceSwitch = String(h.surfaceSwitch || "");
+      let surfaceSwitchAdj = 0;
+      if (surfaceSwitch && surfaceRunNo === 1) {
+        recentAdj *= 0.55;
+        const provenFit = Math.max(num(h.detailDistanceFit) ?? 50, num(h.detailCourseFit) ?? 50);
+        surfaceSwitchAdj = provenFit >= 56 ? -0.35 : provenFit >= 52 ? -0.70 : -1.20;
+      } else if (surfaceSwitch && surfaceRunNo === 2) {
+        recentAdj *= 0.82;
+        surfaceSwitchAdj = -0.35;
+      }
+
       // 条件別の脚質適性。短距離・ダートは先行力、長距離芝は末脚を強める
       let paceAdj = 0;
       if (base !== null) {
@@ -2179,7 +2226,7 @@ export default function JRAPredictionTool() {
       const marketSafetyAdj = popularity === null ? 0 : clamp((4 - popularity) * marketCoef, -2.0, 1.25);
 
       // 誤コメントの影響を増幅しないよう、学習済み係数にも実効上限を設ける。
-      const contextAdj = clamp(trainingAdj + commentAdj + styleAdj + groundAdj + classAdj + jockeyAdj + gateAdj + pedigreeAdj + conditionAdj + detailDistanceAdj + detailCourseAdj + detailGroundAdj + bodyAdj, -15, 15);
+      const contextAdj = clamp(trainingAdj + commentAdj + styleAdj + groundAdj + classAdj + jockeyAdj + gateAdj + pedigreeAdj + conditionAdj + detailDistanceAdj + detailCourseAdj + detailGroundAdj + bodyAdj + surfaceSwitchAdj, -15, 15);
 
       const finalScore = score !== null ? score + oddsBonus + contextAdj : null;
       const selectionScore = finalScore !== null ? finalScore + marketSafetyAdj : null;
@@ -2191,6 +2238,7 @@ export default function JRAPredictionTool() {
         _recentAdj: recentAdj,
         _paceAdj: paceAdj,
         _reliabilityAdj: reliabilityAdj,
+        _surfaceSwitchAdj: surfaceSwitchAdj,
         _oddsBonus: oddsBonus,
         _trainingScore: training100,
         _commentScore: comment100,
