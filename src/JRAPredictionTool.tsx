@@ -2528,6 +2528,51 @@ export default function JRAPredictionTool() {
     return {score,grade,reasons};
   },[ranked,dataQuality,raceAnalytics]);
 
+  const buyDecision = useMemo(() => {
+    const scored=[...ranked].filter((h:any)=>h._selectionScore!==null).sort((a:any,b:any)=>b._selectionScore-a._selectionScore);
+    const main = ranked.find((h:any)=>(h.mark || h._autoMark)==="◎") || scored[0];
+    if (!main) return { grade:"-", label:"判定待ち", ticket:"見送り", reason:"◎が決まると買い判定を表示します。", historyN:0, historyWins:0, historyWinRate:0, breakEven:null as number|null, main:null as any };
+    const pop=num(main.ninki), odds=num(main.odds);
+    let historyN=0, historyWins=0;
+    savedRaces.filter((r:any)=>r.status==='completed').forEach((r:any)=>{
+      const hs=r.horses||[];
+      if(resultTop3Of(r).length<3) return;
+      const explicit=hs.find((h:any)=>(h.mark||h._autoMark)==="◎");
+      const pred=[...hs].filter((h:any)=>num(h.predictedScore)!==null).sort((a:any,b:any)=>num(b.predictedScore)-num(a.predictedScore));
+      const h=explicit || pred[0];
+      if(!h) return;
+      const hp=num(h.ninki);
+      if(hp===null || hp<1 || hp>3) return;
+      historyN++;
+      if(num(h.finish)===1) historyWins++;
+    });
+    const historyWinRate=historyN ? historyWins/historyN*100 : 0;
+    const breakEven=odds && odds>0 ? 100/odds : null;
+    const gap=scored[1] ? Number(main._selectionScore)-Number(scored[1]._selectionScore) : 0;
+    let grade="C", label="見送り寄り", ticket="見送り";
+    const reasons:string[]=[];
+    if(pop===null){ reasons.push("人気未入力のため最終判定できません"); }
+    else if(pop<=3){
+      grade = confidence.score>=65 && raceAnalytics.chaos<65 ? "A" : "B";
+      label = grade==="A" ? "単勝候補" : "単勝・条件付き";
+      ticket = `単勝 ${main.umaban}`;
+      reasons.push(`◎が${pop}番人気（過去実績で最も安定しているゾーン）`);
+    } else if(pop===4){
+      grade="C"; label="条件付き単勝"; ticket=`単勝 ${main.umaban}`;
+      reasons.push("◎4番人気は検証余地あり。買うなら単勝に限定");
+    } else {
+      grade="D"; label="原則見送り"; ticket="見送り";
+      reasons.push(`◎が${pop}番人気。過去検証では5番人気以下の◎は勝率が大きく低下`);
+    }
+    if(gap>=3) reasons.push(`◎と次点の指数差 ${gap.toFixed(1)}`);
+    else reasons.push(`上位指数差 ${gap.toFixed(1)}で接戦`);
+    if(raceAnalytics.chaos>=65) reasons.push(`波乱度${raceAnalytics.chaos}のため買い判定を抑制`);
+    if(dataQuality.score<65) reasons.push(`データ品質${dataQuality.score}のため慎重判定`);
+    if(pop!==null && pop<=3 && (raceAnalytics.chaos>=80 || dataQuality.score<45)) { grade="C"; label="見送り検討"; ticket="見送り"; }
+    if(breakEven!==null) reasons.push(`現在${odds?.toFixed(1)}倍 → 損益分岐勝率 約${breakEven.toFixed(1)}%`);
+    return { grade,label,ticket,reason:reasons.join(" / "),historyN,historyWins,historyWinRate,breakEven,main };
+  },[ranked,savedRaces,confidence,raceAnalytics,dataQuality]);
+
   const buildReview = (race:any) => {
     const all=(race?.horses||[]);
     const actual=resultTop3Of(race);
@@ -2793,7 +2838,8 @@ export default function JRAPredictionTool() {
           <button onClick={()=>scrollToSection("race-info")} className="shrink-0 rounded-full bg-gray-100 px-3 py-1.5 text-[11px] font-black text-gray-700">① レース</button>
           <button onClick={()=>scrollToSection("bulk-input")} className="shrink-0 rounded-full bg-emerald-100 px-3 py-1.5 text-[11px] font-black text-emerald-800">② 入力</button>
           <button onClick={()=>scrollToSection("horse-evaluation")} className="shrink-0 rounded-full bg-blue-100 px-3 py-1.5 text-[11px] font-black text-blue-800">③ 全頭評価</button>
-          <button onClick={()=>scrollToSection("marked-summary")} className="shrink-0 rounded-full bg-indigo-100 px-3 py-1.5 text-[11px] font-black text-indigo-800">④ 印・買い目</button>
+          <button onClick={()=>scrollToSection("buy-decision")} className="shrink-0 rounded-full bg-emerald-100 px-3 py-1.5 text-[11px] font-black text-emerald-800">④ AI買い判定</button>
+          <button onClick={()=>scrollToSection("marked-summary")} className="shrink-0 rounded-full bg-indigo-100 px-3 py-1.5 text-[11px] font-black text-indigo-800">⑤ 印・買い目</button>
         </div>
       </div>
 
@@ -2991,6 +3037,24 @@ export default function JRAPredictionTool() {
         </div>}
       </div>
 
+      {buyDecision.main && (
+        <div id="buy-decision" className="mx-3 mt-3 scroll-mt-24 rounded-2xl border-2 border-emerald-300 bg-white p-4 shadow-md">
+          <div className="flex items-start justify-between gap-3">
+            <div><div className="text-[11px] font-black tracking-wide text-emerald-700">💰 AI買い判定</div><div className="mt-1 text-2xl font-black text-slate-900">{buyDecision.grade} <span className="text-base text-emerald-700">{buyDecision.label}</span></div></div>
+            <div className="rounded-xl bg-emerald-50 px-3 py-2 text-center"><div className="text-[10px] font-bold text-emerald-700">推奨</div><div className="text-lg font-black text-emerald-900">{buyDecision.ticket}</div></div>
+          </div>
+          <div className="mt-3 rounded-xl bg-slate-50 p-3">
+            <div className="text-xs font-black text-slate-800">◎ {buyDecision.main.umaban} {buyDecision.main.name || ""} <span className="font-normal text-slate-500">{buyDecision.main.ninki ? `${buyDecision.main.ninki}人気` : "人気未入力"}{buyDecision.main.odds ? ` / ${buyDecision.main.odds}倍` : ""}</span></div>
+            <div className="mt-1 text-[11px] leading-relaxed text-slate-600">{buyDecision.reason}</div>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
+            <div className="rounded-lg bg-indigo-50 p-2"><div className="text-[10px] text-indigo-600">過去 ◎1〜3人気</div><div className="mt-0.5 font-black text-indigo-900">勝率 {buyDecision.historyN ? buyDecision.historyWinRate.toFixed(1) : "-"}% <span className="text-[9px] font-normal">({buyDecision.historyWins}/{buyDecision.historyN})</span></div></div>
+            <div className="rounded-lg bg-amber-50 p-2"><div className="text-[10px] text-amber-700">現在オッズの損益分岐</div><div className="mt-0.5 font-black text-amber-900">{buyDecision.breakEven!==null ? `${buyDecision.breakEven.toFixed(1)}%` : "オッズ入力待ち"}</div></div>
+          </div>
+          <div className="mt-2 text-[10px] leading-relaxed text-gray-400">※過去成績は保存済み結果から自動集計。払戻データを使った回収率保証ではありません。3連系は相手抜けが残るため通常は推奨しません。</div>
+        </div>
+      )}
+
       {/* 注目馬・波乱度・学習状況 */}
       {raceAnalytics.marked.length > 0 && (
         <div id="marked-summary" className="mx-3 mt-3 scroll-mt-24 grid gap-3 lg:grid-cols-3">
@@ -3013,7 +3077,7 @@ export default function JRAPredictionTool() {
 
       {/* テーブル */}
       <div id="horse-evaluation" className="mx-3 mt-3 scroll-mt-24">
-        <div className="mb-2 flex items-center justify-between gap-2"><div><div className="text-sm font-black text-gray-800">③ 全頭評価</div><div className="text-[10px] text-gray-500">横にスワイプして各指数を確認できます</div></div><button onClick={()=>scrollToSection("marked-summary")} className="shrink-0 rounded-lg bg-indigo-600 px-3 py-2 text-[11px] font-black text-white shadow-sm">印・買い目を見る ↑</button></div>
+        <div className="mb-2 flex items-center justify-between gap-2"><div><div className="text-sm font-black text-gray-800">③ 全頭評価</div><div className="text-[10px] text-gray-500">横にスワイプして各指数を確認できます</div></div><button onClick={()=>scrollToSection("buy-decision")} className="shrink-0 rounded-lg bg-emerald-600 px-3 py-2 text-[11px] font-black text-white shadow-sm">AI買い判定へ ↑</button></div>
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
         <table className="min-w-full border-collapse">
           <thead>
@@ -3148,6 +3212,8 @@ export default function JRAPredictionTool() {
         </table>
       </div>
       </div>
+
+
 
       <div className="mx-3 mt-2 text-xs text-gray-400 leading-relaxed">
         <div>※不足項目は「不足項目を補完」で中立値（適性50・馬体増減0）を自動入力できます。実データがある項目は上書きしません。</div>
