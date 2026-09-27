@@ -330,7 +330,14 @@ export default function JRAPredictionTool() {
           if (data.learned) setLearned(normalizeLearnedWeights(data.learned));
           if (data.historyCount !== undefined) setHistoryCount(data.historyCount);
           if (Array.isArray(data.learningHistory)) setLearningHistory(data.learningHistory);
-          if (data.horses) setHorses(repairCommentAssignments(data.horses, data));
+          if (Array.isArray(data.horses)) {
+            const repaired = repairCommentAssignments(data.horses, data);
+            const usable = repaired.filter((h) => h && h.umaban && h.name && !["--", "取消", "馬名"].includes(String(h.name).trim()));
+            // v3.10.6以前の一括入力バグで current state が1〜4頭まで壊れたケースは
+            // その壊れた配列を再ロードしない。保存済み学習・レース履歴には触れない。
+            if (repaired.length >= 5 || usable.length >= 5 || repaired.length === 0) setHorses(repaired);
+            else setHorses([]);
+          }
           if (data.weights) setWeights(data.weights);
           if (data.agariBonus !== undefined) setAgariBonus(data.agariBonus);
           if (data.oddsOn !== undefined) setOddsOn(data.oddsOn);
@@ -707,6 +714,13 @@ export default function JRAPredictionTool() {
     }) || null;
   };
 
+  const isValidParsedHorseName = (value) => {
+    const v = String(value || "").trim();
+    if (!v || ["--", "ー", "取消", "除外", "中止", "馬名"].includes(v)) return false;
+    if (/^(?:取消|除外|中止|人気|オッズ|単勝)$/.test(v)) return false;
+    return /^[ァ-ヶー一-龠A-Za-z0-9・･ー]{2,30}$/.test(v);
+  };
+
   const parseRaceText = (text, baseList) => {
     const lines = String(text || "")
       .replace(/\r/g, "")
@@ -716,7 +730,7 @@ export default function JRAPredictionTool() {
     const list = baseList.map((h) => ({ ...h }));
 
     const isHorseNumber = (line) => /^\d{1,2}$/.test(line) && Number(line) >= 1 && Number(line) <= 18;
-    const isHorseName = (line) => /^[ァ-ヶー一-龠A-Za-z0-9・･ー]{2,30}$/.test(line)
+    const isHorseName = (line) => isValidParsedHorseName(line)
       && !/(人気|データベース|芝|ダート|良|稍|重|不良)/.test(line);
 
     for (let i = 0; i < lines.length; i += 1) {
@@ -955,7 +969,8 @@ export default function JRAPredictionTool() {
         const values = cols.slice(1, sexIdx);
         let h = list.find((x) => String(x.umaban) === umaban) || findHorse(name, list);
         if (!h) { h = { ...emptyHorse(), umaban, name }; list.push(h); }
-        h.umaban = umaban; h.name = name;
+        h.umaban = umaban;
+        if (isValidParsedHorseName(name)) h.name = name;
         const clean = (v) => String(v ?? "").replace(/\*/g, "");
         [h.best,h.start,h.oikake,h.agari,h.avg5,h.dist,h.course,h.r3,h.r2,h.r1] = Array.from({length:10},(_,k)=>clean(values[k] ?? ""));
         h.sex = cols[sexIdx] || h.sex;
@@ -972,7 +987,7 @@ export default function JRAPredictionTool() {
       if (!isNumberLine(lines[i])) continue;
       const umaban = lines[i];
       const name = lines[i + 1] || "";
-      if (!name || /^\d/.test(name)) continue;
+      if (!isValidParsedHorseName(name) || /^\d/.test(name)) continue;
       let end = lines.length;
       for (let j = i + 2; j < lines.length; j += 1) {
         if (isNumberLine(lines[j]) && j + 1 < lines.length && !/^\d/.test(lines[j + 1])) { end = j; break; }
@@ -986,7 +1001,8 @@ export default function JRAPredictionTool() {
       const parts = summary.split(/\s+/);
       let h = list.find((x) => String(x.umaban) === umaban) || findHorse(name, list);
       if (!h) { h = { ...emptyHorse(), umaban, name }; list.push(h); }
-      h.umaban = umaban; h.name = name;
+      h.umaban = umaban;
+      if (isValidParsedHorseName(name)) h.name = name;
       const vals = parts.slice(0,4).map((v)=>v.replace(/\*/g, ""));
       h.avg5 = vals[0] || h.avg5;
       h.r3 = vals[1] || h.r3;
@@ -2926,7 +2942,9 @@ export default function JRAPredictionTool() {
               // 以前は「出馬表」があるだけで [] から作り直していたため、解析に2頭しか
               // 成功しないと horses 自体が2頭へ縮むことがあった。
               const before = horses.map(h=>({...h}));
-              let next = before.map(h=>({...h}));
+              const usableBefore = before.filter((h)=>h.umaban && h.name && !["--","取消","馬名"].includes(String(h.name).trim()));
+              // 既に壊れて1〜4頭しかない current state は引き継がず、この入力から再構築する。
+              let next = (before.length > 0 && usableBefore.length < 5) ? [] : before.map(h=>({...h}));
               if(scanText.race) {
                 next=parseRaceText(scanText.race,next);
                 // 通常の出馬表欄へ詳細版を貼った場合も自動で拾う。
@@ -2939,7 +2957,7 @@ export default function JRAPredictionTool() {
               if(scanText.training) next=parseTrainingText(scanText.training,next);
               if(scanText.details) next=parseDetailRaceText(scanText.details,next);
 
-              const validBefore = before.filter((h)=>h.umaban && h.name && h.name !== "--" && h.name !== "取消");
+              const validBefore = usableBefore;
               const validNext = next.filter((h)=>h.umaban && h.name && h.name !== "--" && h.name !== "取消");
               // 既に全頭がいる状態で入力後に頭数が大幅減するのは異常。反映を中止する。
               if (validBefore.length >= 5 && validNext.length < Math.max(5, Math.ceil(validBefore.length * 0.6))) {
