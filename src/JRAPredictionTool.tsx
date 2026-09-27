@@ -2922,7 +2922,11 @@ export default function JRAPredictionTool() {
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <button onClick={()=>{
-              let next=scanText.race ? [] : horses.map(h=>({...h}));
+              // 部分的にしか解析できなかった入力で既存の全頭データを消さない。
+              // 以前は「出馬表」があるだけで [] から作り直していたため、解析に2頭しか
+              // 成功しないと horses 自体が2頭へ縮むことがあった。
+              const before = horses.map(h=>({...h}));
+              let next = before.map(h=>({...h}));
               if(scanText.race) {
                 next=parseRaceText(scanText.race,next);
                 // 通常の出馬表欄へ詳細版を貼った場合も自動で拾う。
@@ -2934,8 +2938,21 @@ export default function JRAPredictionTool() {
               if(scanText.comment) next=parseCommentText(scanText.comment,next);
               if(scanText.training) next=parseTrainingText(scanText.training,next);
               if(scanText.details) next=parseDetailRaceText(scanText.details,next);
+
+              const validBefore = before.filter((h)=>h.umaban && h.name && h.name !== "--" && h.name !== "取消");
+              const validNext = next.filter((h)=>h.umaban && h.name && h.name !== "--" && h.name !== "取消");
+              // 既に全頭がいる状態で入力後に頭数が大幅減するのは異常。反映を中止する。
+              if (validBefore.length >= 5 && validNext.length < Math.max(5, Math.ceil(validBefore.length * 0.6))) {
+                flash(`⚠️ 頭数異常を検出（${validBefore.length}頭→${validNext.length}頭）。全頭データを保護して反映を中止しました`);
+                return;
+              }
+              // 新規レースでも1〜4頭しか認識できない場合は、壊れた予想を作らない。
+              if (validBefore.length === 0 && validNext.length > 0 && validNext.length < 5) {
+                flash(`⚠️ ${validNext.length}頭しか認識できませんでした。入力形式を確認してください（データは反映していません）`);
+                return;
+              }
               setHorses(next);
-              flash(`${next.filter((h)=>h.name && h.umaban).length}頭へテキストを反映しました`);
+              flash(`${validNext.length}頭へテキストを反映しました`);
               scrollToSection("horse-evaluation");
             }} className="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-black text-white shadow">テキストを一括反映</button>
             <button onClick={()=>setScanText({race:"",standard:"",recent:"",pace:"",comment:"",training:"",details:""})} className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-bold text-gray-600">入力欄をクリア</button>
