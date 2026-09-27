@@ -2381,13 +2381,18 @@ export default function JRAPredictionTool() {
       return rescue;
     };
 
+    // 印はレース頭数に応じて絞る。12頭以下で最大5頭、13〜16頭で最大6頭、17〜18頭で最大7頭。
+    // ◎○▲は各1頭固定。残りだけを相手候補として再監査する。
+    const fieldSize = sorted.length;
+    const supportCount = fieldSize <= 12 ? 2 : fieldSize <= 16 ? 3 : 4;
     const support = sorted
       .filter((h) => !top3Ids.has(h.id))
       .map((h) => ({ h, rescue: supportScore(h) }))
       .sort((a, b) => b.rescue - a.rescue || b.h._selectionScore - a.h._selectionScore)
-      .slice(0, 3)
+      .slice(0, supportCount)
       .map((x) => x.h);
-    const supportMark = new Map(support.map((h, i) => [h.id, i < 2 ? "△" : "☆"]));
+    // 最後の1頭だけ☆、それ以前は△。
+    const supportMark = new Map(support.map((h, i) => [h.id, i === support.length - 1 ? "☆" : "△"]));
 
     return computed.map((h) => {
       const idx = rankMap.get(h.id);
@@ -2431,8 +2436,9 @@ export default function JRAPredictionTool() {
       const valueScore = Math.round(clamp(50 + valueGap * 7 + (odds && odds >= 10 ? 5 : 0), 20, 95));
       return { ...h, _valueScore: valueScore };
     });
-    const marked = enhanced.filter((h)=>h.mark || h._autoMark).map((h)=>({ ...h, _displayMark: h.mark || h._autoMark }))
-      .sort((a,b)=>(MARK_ORDER[a._displayMark]??9)-(MARK_ORDER[b._displayMark]??9));
+    // 注目馬一覧は自動順位の印を正とする。過去入力に残った重複markで頭数が膨らむのを防ぐ。
+    const marked = enhanced.filter((h)=>h._autoMark).map((h)=>({ ...h, _displayMark: h._autoMark }))
+      .sort((a,b)=>(MARK_ORDER[a._displayMark]??9)-(MARK_ORDER[b._displayMark]??9) || (a._rank??99)-(b._rank??99));
     const pick = (m) => marked.find((h)=>h._displayMark===m);
     const main = pick("◎"), sub = pick("○"), thirdPick = pick("▲");
     const deltas = marked.filter((h)=>["△","☆"].includes(h._displayMark)).slice(0,3);
@@ -2557,7 +2563,7 @@ export default function JRAPredictionTool() {
 
   const buyDecision = useMemo(() => {
     const scored=[...ranked].filter((h:any)=>h._selectionScore!==null).sort((a:any,b:any)=>b._selectionScore-a._selectionScore);
-    const main = ranked.find((h:any)=>(h.mark || h._autoMark)==="◎") || scored[0];
+    const main = ranked.find((h:any)=>h._autoMark==="◎") || scored[0];
     if (!main) return { grade:"-", label:"判定待ち", ticket:"見送り", reason:"◎が決まると買い判定を表示します。", historyN:0, historyWins:0, historyWinRate:0, breakEven:null as number|null, main:null as any };
     const pop=num(main.ninki), odds=num(main.odds);
     let historyN=0, historyWins=0;
@@ -2702,7 +2708,7 @@ export default function JRAPredictionTool() {
     oddsStrength,
     confidenceSnapshot: confidence,
     dataQualitySnapshot: dataQuality,
-    horses: ranked.map((h) => ({ ...sanitizeHorseRecord(h), mark: h.mark || h._autoMark || "", predictedScore: h._selectionScore ?? h._finalScore })),
+    horses: ranked.map((h) => ({ ...sanitizeHorseRecord(h), mark: h._autoMark || "", predictedScore: h._selectionScore ?? h._finalScore })),
     status: previous.status || "pending",
     savedAt: previous.savedAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -2803,7 +2809,7 @@ export default function JRAPredictionTool() {
     updated.learnedApplied = activeRecord?.learnedApplied || canLearn;
     updated.resultOrder = order.join("-");
     updated.learningChanges = changes;
-    updated.horses = raceHorses.map((h:any) => ({ ...sanitizeHorseRecord(h), mark: h.mark || h._autoMark || "", predictedScore: h._selectionScore ?? h._finalScore, finish: h.finish || "" }));
+    updated.horses = raceHorses.map((h:any) => ({ ...sanitizeHorseRecord(h), mark: h._autoMark || "", predictedScore: h._selectionScore ?? h._finalScore, finish: h.finish || "" }));
     updated.review = buildReview(updated);
     setHorses(raceHorses.map((h:any)=>sanitizeHorseRecord(h)));
     setSavedRaces((prev) => [updated, ...prev.filter((r) => r.id !== raceId)]);
@@ -3189,13 +3195,13 @@ export default function JRAPredictionTool() {
                     </td>
                     <td className={cellBase}>
                       <select
-                        value={h.mark || ""}
-                        onChange={(e) => updateHorse(h.id, "mark", e.target.value)}
+                        value={h.mark === "消" ? "消" : (h._autoMark || "")}
+                        onChange={(e) => updateHorse(h.id, "mark", e.target.value === "消" ? "消" : "")}
                         className="bg-transparent text-red-600 font-bold text-sm"
                         aria-label={`${h.name || h.umaban}の印`}
                       >
-                        <option value="">{h._autoMark || "—"}</option>
-                        {["◎","○","▲","△","☆","消"].map((m)=><option key={m} value={m}>{m}</option>)}
+                        <option value={h._autoMark || ""}>{h._autoMark || "—"}</option>
+                        <option value="消">消</option>
                       </select>
                     </td>
                     <td className={`${cellBase} text-left font-bold text-gray-800 w-28`}>
