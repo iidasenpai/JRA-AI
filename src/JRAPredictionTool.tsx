@@ -479,7 +479,7 @@ export default function JRAPredictionTool() {
   const exportFullBackup = () => {
     const payload = {
       type: "jra-ai-full-backup",
-      version: "3.10.5",
+      version: "3.10.9",
       exportedAt: new Date().toISOString(),
       state: {
         raceName, track, surface, distance, going, raceClass, paceType,
@@ -736,14 +736,18 @@ export default function JRAPredictionTool() {
     for (let i = 0; i < lines.length; i += 1) {
       if (!isHorseNumber(lines[i])) continue;
       const umaban = lines[i];
-      const nameLine = lines[i + 1] || "";
+      // JRA-VAN系コピーでは「馬番 → --（予想印）→ 馬名」の順になる。
+      // 予想印が無い旧形式も同時に許容する。
+      let cursor = i + 1;
+      if (/^(?:--|◎|○|▲|△|☆|×)$/.test(lines[cursor] || "")) cursor += 1;
+      const nameLine = lines[cursor] || "";
       if (!isHorseName(nameLine)) continue;
 
       const name = nameLine;
-      const info = lines[i + 2] || "";
-      const oddsLine = lines[i + 3] || "";
-      const bodyLine = lines[i + 4] || "";
-      const changeLine = lines[i + 5] || "";
+      const info = lines[cursor + 1] || "";
+      const oddsLine = lines[cursor + 2] || "";
+      const bodyLine = lines[cursor + 3] || "";
+      const changeLine = lines[cursor + 4] || "";
 
       let h = list.find((x) => String(x.umaban) === umaban) || findHorse(name, list);
       if (!h) { h = { ...emptyHorse(), umaban, name }; list.push(h); }
@@ -775,8 +779,7 @@ export default function JRAPredictionTool() {
 
       // 「524(+4)」「524kg(+4)」「馬体重 524(+4)」などを許容し、保存するのは増減値だけ。
       const bodyText = `${info} ${oddsLine} ${bodyLine} ${changeLine}`;
-      const bodyChangeMatch = bodyText.match(/(?:馬体重\\s*)?\d{3}\\s*kg?\\s*\\(([+-]?\d+)\\)/i)
-        || bodyText.match(/\b\d{3}\\s*\\(([+-]?\d+)\\)/);
+      const bodyChangeMatch = bodyText.match(/(?:馬体重\s*)?\d{3}\s*(?:kg)?\s*\(\s*([+\-]?\d+)\s*\)/i);
       const signedChange = bodyChangeMatch?.[1];
       if (signedChange !== undefined) h.bodyChange = Number(signedChange) > 0 ? `+${Number(signedChange)}` : String(Number(signedChange));
       else {
@@ -811,8 +814,9 @@ export default function JRAPredictionTool() {
       if (!/^\d{1,2}$/.test(lines[i])) continue;
       const n = Number(lines[i]);
       const name = lines[i+1] || "";
-      if (n < 1 || n > 18 || !name || /^\d/.test(name)) continue;
-      if ((lines[i+2] || "").includes(`${name}のデータベース`)) headers.push({ i, umaban:String(n), name });
+      if (n < 1 || n > 18 || !isValidParsedHorseName(name) || /^\d/.test(name)) continue;
+      const dbLine = /^(?:--|◎|○|▲|△|☆|×)$/.test(lines[i+2] || "") ? (lines[i+3] || "") : (lines[i+2] || "");
+      if (dbLine.includes(`${name}のデータベース`)) headers.push({ i, umaban:String(n), name });
     }
     if (!headers.length) return list.map((h)=>autoCompleteHorseFactors(h, { track, surface, distance, raceClass }));
 
@@ -961,7 +965,9 @@ export default function JRAPredictionTool() {
       for (let i = 0; i < lines.length - 1; i += 1) {
         if (!isNumberLine(lines[i])) continue;
         const umaban = lines[i];
-        const cols = lines[i + 1].split(/\s+/);
+        let rowIdx = i + 1;
+        if (/^(?:--|◎|○|▲|△|☆|×)$/.test(lines[rowIdx] || "")) rowIdx += 1;
+        const cols = (lines[rowIdx] || "").split(/\s+/);
         if (cols.length < 8) continue;
         const name = cols[0];
         const sexIdx = cols.findIndex((v, idx) => idx > 1 && /^(牡|牝|セ)\d{1,2}$/.test(v));
@@ -986,13 +992,18 @@ export default function JRAPredictionTool() {
     for (let i = 0; i < lines.length; i += 1) {
       if (!isNumberLine(lines[i])) continue;
       const umaban = lines[i];
-      const name = lines[i + 1] || "";
+      let nameIdx = i + 1;
+      if (/^(?:--|◎|○|▲|△|☆|×)$/.test(lines[nameIdx] || "")) nameIdx += 1;
+      const name = lines[nameIdx] || "";
       if (!isValidParsedHorseName(name) || /^\d/.test(name)) continue;
       let end = lines.length;
-      for (let j = i + 2; j < lines.length; j += 1) {
-        if (isNumberLine(lines[j]) && j + 1 < lines.length && !/^\d/.test(lines[j + 1])) { end = j; break; }
+      for (let j = nameIdx + 1; j < lines.length; j += 1) {
+        if (!isNumberLine(lines[j])) continue;
+        let ni = j + 1;
+        if (/^(?:--|◎|○|▲|△|☆|×)$/.test(lines[ni] || "")) ni += 1;
+        if (ni < lines.length && isValidParsedHorseName(lines[ni]) && !/^\d/.test(lines[ni])) { end = j; break; }
       }
-      const block = lines.slice(i + 2, end);
+      const block = lines.slice(nameIdx + 1, end);
       const summary = [...block].reverse().find((line) => {
         const parts = line.split(/\s+/);
         return parts.length >= 6 && parts.slice(0,4).every((v)=>/^\d{1,3}(?:\.\d+)?\*?$/.test(v));
