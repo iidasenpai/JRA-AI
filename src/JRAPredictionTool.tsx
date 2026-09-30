@@ -2264,7 +2264,12 @@ export default function JRAPredictionTool() {
 
       // 欠損が多い馬の過大評価を抑える信頼度補正
       const coreKnown = [h._best, h._avg5, h._dist, h._course].filter((v) => v !== null).length;
-      const reliabilityAdj = base !== null ? -(4 - coreKnown) * 0.35 : 0;
+      const recentKnown = [h._r1, h._r2, h._r3].filter((v) => v !== null).length;
+      const recentSurfaceCount = Array.isArray(h.recentSurfaces) ? h.recentSurfaces.length : 0;
+      // データ不足は能力不足とはみなさず「不確実性」として小さく縮小する。
+      // 新馬・少キャリア馬を強制的に消さず、過大な一点評価だけを防ぐ。
+      const uncertainty = Math.max(0, 3 - Math.max(recentKnown, recentSurfaceCount));
+      const reliabilityAdj = base !== null ? -(4 - coreKnown) * 0.35 - uncertainty * 0.28 : 0;
 
       let score = base !== null ? base + recentAdj + paceAdj + reliabilityAdj : null;
 
@@ -2279,11 +2284,11 @@ export default function JRAPredictionTool() {
       // 調教・厩舎コメントを100点化。50〜55点を中立として補正する。
       const training100 = num(h.trainingScore) ?? GRADE_TO_TRAINING_100[h.training] ?? 70;
       const comment100 = scoreCommentText(h.comment || "");
-      const effectiveTrainingLearn = learningOn ? clamp(Number(learned.training ?? 1), 0.75, 1.15) : 1;
-      const effectiveCommentLearn = learningOn ? clamp(Number(learned.comment ?? 1), 0.75, 1.10) : 1;
+      const effectiveTrainingLearn = learningOn ? clamp(Number(learned.training ?? 1), 0.80, 1.05) : 1;
+      const effectiveCommentLearn = learningOn ? clamp(Number(learned.comment ?? 1), 0.85, 1.05) : 1;
       const effectiveConditionLearn = learningOn ? clamp(Number(learned.condition ?? 1), 0.75, 1.10) : 1;
-      const trainingAdj = clamp((training100 - 65) / 5, -5.5, 6.0) * effectiveTrainingLearn;
-      const commentAdj = clamp((comment100 - 55) / 8, -3.5, 4.5) * effectiveCommentLearn;
+      const trainingAdj = clamp((training100 - 65) / 7.5, -3.0, 3.2) * effectiveTrainingLearn;
+      const commentAdj = clamp((comment100 - 55) / 12, -2.0, 2.2) * effectiveCommentLearn;
       const styleAdj = (STYLE_PACE_SCORE[paceType]?.[h.runningStyle] ?? 0) * (learningOn ? learned.pace : 1);
       const fitAdj = (value, scale, key) => value === null ? 0 : clamp((value - 50) / scale, -2.2, 2.2) * (learningOn ? learned[key] : 1);
       const groundAdj = fitAdj(h._groundFit, 20, "ground");
@@ -2293,13 +2298,13 @@ export default function JRAPredictionTool() {
       const pedigreeAdj = fitAdj(h._pedigreeFit, 28, "pedigree");
       const conditionAdj = h._condition === null ? 0 : clamp((h._condition - 50) / 22, -2.2, 2.2) * effectiveConditionLearn;
       // 詳細出馬表の実績はタイム指数とは別物。小標本補正済みの適性値として弱く加点する。
-      const detailDistanceAdj = h._detailDistanceFit === null ? 0 : clamp((h._detailDistanceFit - 50) / 10, -1.2, 1.6);
-      const detailCourseAdj = h._detailCourseFit === null ? 0 : clamp((h._detailCourseFit - 50) / 10, -1.0, 1.4);
+      const detailDistanceAdj = h._detailDistanceFit === null ? 0 : clamp((h._detailDistanceFit - 50) / 8, -1.5, 2.2);
+      const detailCourseAdj = h._detailCourseFit === null ? 0 : clamp((h._detailCourseFit - 50) / 9, -1.2, 1.7);
       const detailGroundAdj = h._detailGroundFit === null ? 0 : clamp((h._detailGroundFit - 50) / 12, -0.8, 1.0);
       let bodyAdj = 0;
       if (h._bodyChange !== null) {
         const abs = Math.abs(h._bodyChange);
-        bodyAdj = abs <= 6 ? 0.3 : abs <= 12 ? -0.3 : abs <= 18 ? -1.0 : -1.8;
+        bodyAdj = abs <= 4 ? 0.10 : abs <= 8 ? 0 : abs <= 12 ? -0.20 : abs <= 18 ? -0.65 : -1.10;
         bodyAdj *= learningOn ? learned.body : 1;
       }
       // 160R検証では、人気薄の高指数馬を◎に持ち上げすぎる傾向が確認された。
@@ -2308,8 +2313,14 @@ export default function JRAPredictionTool() {
       const popularity = num(h.ninki);
       // value学習値が低いほど「AIだけが高評価する穴」を信用しすぎない。
       // 現在の学習値0.65なら係数0.60、初期値1.00なら0.25程度。
-      const marketCoef = learningOn ? clamp(1.25 - Number(learned.value ?? 1), 0.20, 0.65) : 0.25;
-      const marketSafetyAdj = popularity === null ? 0 : clamp((4 - popularity) * marketCoef, -2.0, 1.25);
+      const marketCoef = learningOn ? clamp(1.35 - Number(learned.value ?? 1), 0.30, 0.72) : 0.35;
+      // 人気は能力点には混ぜず、◎選定時の逆張り暴走だけを抑える安全装置。
+      // 1〜3人気は小さく補強、4人気以下は段階的に抑制。ただし能力差が大きい穴馬は後段で再昇格できる。
+      const marketSafetyAdj = popularity === null ? 0
+        : popularity <= 3 ? clamp((4 - popularity) * marketCoef, 0, 1.5)
+        : popularity <= 5 ? -(popularity - 3) * 0.75
+        : popularity <= 7 ? -2.2 - (popularity - 6) * 0.45
+        : -3.0;
 
       // 誤コメントの影響を増幅しないよう、学習済み係数にも実効上限を設ける。
       const contextAdj = clamp(trainingAdj + commentAdj + styleAdj + groundAdj + classAdj + jockeyAdj + gateAdj + pedigreeAdj + conditionAdj + detailDistanceAdj + detailCourseAdj + detailGroundAdj + bodyAdj + surfaceSwitchAdj, -15, 15);
@@ -2339,71 +2350,66 @@ export default function JRAPredictionTool() {
 
   const ranked = useMemo(() => {
     const withScore = computed.filter((h) => h._selectionScore !== null);
-    const sorted = [...withScore].sort((a, b) => b._selectionScore - a._selectionScore);
-    const rankMap = new Map(sorted.map((h, i) => [h.id, i]));
-
-    // ◎○▲は純粋な上位3頭を維持。今日の検証で弱かった「相手の拾い漏れ」だけを補強する。
-    // 4〜10位から、人気・上がり・近走・距離/コース・前走・調教に裏付けがある馬を
-    // △△☆の候補として再監査する。これにより本命ロジックを壊さずヒモ抜けを減らす。
-    const top3Ids = new Set(sorted.slice(0, 3).map((h) => h.id));
-    const fieldValues = (key) => sorted.map((h) => num(h[key])).filter((v) => v !== null);
-    const percentile = (value, values) => {
-      if (value === null || !values.length) return 0;
-      const below = values.filter((v) => v <= value).length;
-      return below / values.length;
+    const abilitySorted = [...withScore].sort((a, b) => b._finalScore - a._finalScore);
+    const pct = (value:any, values:number[]) => {
+      const v=num(value); if(v===null || !values.length) return 0.5;
+      return values.filter((x)=>x<=v).length/values.length;
     };
-    const agariVals = fieldValues("_agari");
-    const avg5Vals = fieldValues("_avg5");
-    const r1Vals = fieldValues("_r1");
-    const distVals = fieldValues("_distVal");
-    const courseVals = fieldValues("_courseVal");
-    const trainingVals = fieldValues("_trainingScore");
+    const vals=(key:string)=>withScore.map((h:any)=>num(h[key])).filter((v:any)=>v!==null) as number[];
+    const distVals=vals("_detailDistanceFit"), courseVals=vals("_detailCourseFit"), groundVals=vals("_detailGroundFit");
+    const r1Vals=vals("_r1"), avg5Vals=vals("_avg5"), agariVals=vals("_agari"), startVals=vals("_start");
 
-    const supportScore = (h) => {
-      const modelRank = (rankMap.get(h.id) ?? 99) + 1;
-      const pop = num(h.ninki);
-      let rescue = 0;
-      // 元順位を土台にしつつ、6〜10位にも逆転余地を持たせる。
-      rescue += Math.max(0, 11 - modelRank) * 1.15;
-      if (pop !== null) {
-        if (pop <= 3) rescue += 5.0;
-        else if (pop <= 5) rescue += 3.0;
-        else if (pop <= 7) rescue += 1.2;
-      }
-      rescue += percentile(num(h._agari), agariVals) * 2.8;
-      rescue += percentile(num(h._avg5), avg5Vals) * 2.4;
-      rescue += percentile(num(h._r1), r1Vals) * 1.8;
-      rescue += percentile(num(h._distVal), distVals) * 1.6;
-      rescue += percentile(num(h._courseVal), courseVals) * 1.4;
-      rescue += percentile(num(h._trainingScore), trainingVals) * 1.4;
-      // 11位以下は救済しない。広げすぎて印の精度を落とすのを防ぐ。
-      if (modelRank > 10) rescue -= 20;
-      return rescue;
+    // ◎専用スコア: 能力を土台に、今回条件適性・ペース・市場整合性を重視。
+    // 調教/コメントはcomputed側で小さく反映済みなので、ここでは重複加点しない。
+    const winScore=(h:any)=>{
+      const pop=num(h.ninki);
+      const ability=Number(h._finalScore ?? -999);
+      const fit=(pct(h._detailDistanceFit,distVals)-0.5)*2.8 + (pct(h._detailCourseFit,courseVals)-0.5)*1.6 + (pct(h._detailGroundFit,groundVals)-0.5)*1.0;
+      const recent=(pct(h._r1,r1Vals)-0.5)*1.2;
+      let market=Number(h._marketSafetyAdj||0);
+      // 人気薄でも能力がフィールド上位から明確に抜ける場合は逆張りを許容。
+      const abilityTop=abilitySorted[0]?Number(abilitySorted[0]._finalScore):-999;
+      if(pop!==null && pop>=4 && abilityTop-ability<0.8) market*=0.55;
+      return ability + fit + recent + market;
+    };
+    const winSorted=[...withScore].sort((a,b)=>winScore(b)-winScore(a));
+    const rankMap=new Map(winSorted.map((h,i)=>[h.id,i]));
+    const top3Ids=new Set(winSorted.slice(0,3).map(h=>h.id));
+
+    // 相手専用スコア: 「勝ち切る」より2・3着に残る再現性を優先。
+    const supportScore=(h:any)=>{
+      const modelRank=(rankMap.get(h.id)??99)+1;
+      const pop=num(h.ninki);
+      let sc=Math.max(0,11-modelRank)*0.75;
+      if(pop!==null) sc += pop<=3?4.0:pop<=5?2.5:pop<=7?0.8:0;
+      sc += pct(h._detailDistanceFit,distVals)*3.2;
+      sc += pct(h._detailCourseFit,courseVals)*1.8;
+      sc += pct(h._r1,r1Vals)*2.2;
+      sc += pct(h._avg5,avg5Vals)*2.0;
+      sc += pct(h._agari,agariVals)*1.5;
+      if(surface==="ダート") sc += pct(h._start,startVals)*1.4;
+      // 調教は相手でも補助に限定。
+      sc += pct(h._trainingScore,vals("_trainingScore"))*0.45;
+      if(modelRank>10) sc-=15;
+      return sc;
     };
 
-    // 印はレース頭数に応じて絞る。12頭以下で最大5頭、13〜16頭で最大6頭、17〜18頭で最大7頭。
-    // ◎○▲は各1頭固定。残りだけを相手候補として再監査する。
-    const fieldSize = sorted.length;
-    const supportCount = fieldSize <= 12 ? 2 : fieldSize <= 16 ? 3 : 4;
-    const support = sorted
-      .filter((h) => !top3Ids.has(h.id))
-      .map((h) => ({ h, rescue: supportScore(h) }))
-      .sort((a, b) => b.rescue - a.rescue || b.h._selectionScore - a.h._selectionScore)
-      .slice(0, supportCount)
-      .map((x) => x.h);
-    // 最後の1頭だけ☆、それ以前は△。
-    const supportMark = new Map(support.map((h, i) => [h.id, i === support.length - 1 ? "☆" : "△"]));
+    const fieldSize=winSorted.length;
+    // 解析結果に基づき印の乱発を防止。多頭数で絞れない時は買い判定を下げ、印を無制限に増やさない。
+    const supportCount = fieldSize<=10 ? 1 : fieldSize<=13 ? 2 : fieldSize<=15 ? 2 : 3;
+    const support=winSorted.filter(h=>!top3Ids.has(h.id))
+      .map(h=>({h,rescue:supportScore(h)}))
+      .sort((a,b)=>b.rescue-a.rescue || winScore(b.h)-winScore(a.h))
+      .slice(0,supportCount).map(x=>x.h);
+    const supportMark=new Map(support.map((h,i)=>[h.id,i===support.length-1?"☆":"△"]));
 
-    return computed.map((h) => {
-      const idx = rankMap.get(h.id);
-      let autoMark = "";
-      if (idx === 0) autoMark = "◎";
-      else if (idx === 1) autoMark = "○";
-      else if (idx === 2) autoMark = "▲";
-      else autoMark = supportMark.get(h.id) || "";
-      return { ...h, _rank: idx !== undefined ? idx + 1 : null, _autoMark: autoMark, _supportRescue: supportScore(h) };
+    return computed.map((h:any)=>{
+      const idx=rankMap.get(h.id);
+      let autoMark="";
+      if(idx===0) autoMark="◎"; else if(idx===1) autoMark="○"; else if(idx===2) autoMark="▲"; else autoMark=supportMark.get(h.id)||"";
+      return {...h,_rank:idx!==undefined?idx+1:null,_autoMark:autoMark,_supportRescue:supportScore(h),_winScore:winScore(h)};
     });
-  }, [computed]);
+  }, [computed, surface]);
 
   const raceAnalytics = useMemo(() => {
     const scored = ranked.filter((h) => h._selectionScore !== null).sort((a,b)=>b._selectionScore-a._selectionScore);
@@ -2426,6 +2432,8 @@ export default function JRAPredictionTool() {
     const missing = ranked.filter((h)=>h._finalScore===null).length;
     if (missing >= 2) { chaos += 8; reasons.push("指数欠損馬が多い"); }
     if (paceType === "H") { chaos += 6; reasons.push("ハイペース予測"); }
+    if (scored.length >= 16) { chaos += 10; reasons.push("16頭以上の多頭数戦"); }
+    else if (scored.length >= 14) { chaos += 5; reasons.push("多頭数戦"); }
     chaos = Math.round(clamp(chaos, 5, 95));
     const label = chaos >= 80 ? "大波乱" : chaos >= 65 ? "波乱" : chaos >= 45 ? "中波乱" : chaos >= 25 ? "やや堅い" : "堅い";
 
@@ -2437,7 +2445,7 @@ export default function JRAPredictionTool() {
       return { ...h, _valueScore: valueScore };
     });
     // 注目馬一覧は自動順位の印を正とする。過去入力に残った重複markで頭数が膨らむのを防ぐ。
-    const marked = enhanced.filter((h)=>h._autoMark).map((h)=>({ ...h, _displayMark: h._autoMark }))
+    const marked = enhanced.filter((h)=>h._autoMark && h.mark !== "消").map((h)=>({ ...h, _displayMark: h._autoMark }))
       .sort((a,b)=>(MARK_ORDER[a._displayMark]??9)-(MARK_ORDER[b._displayMark]??9) || (a._rank??99)-(b._rank??99));
     const pick = (m) => marked.find((h)=>h._displayMark===m);
     const main = pick("◎"), sub = pick("○"), thirdPick = pick("▲");
@@ -2562,49 +2570,44 @@ export default function JRAPredictionTool() {
   },[ranked,dataQuality,raceAnalytics]);
 
   const buyDecision = useMemo(() => {
-    const scored=[...ranked].filter((h:any)=>h._selectionScore!==null).sort((a:any,b:any)=>b._selectionScore-a._selectionScore);
-    const main = ranked.find((h:any)=>h._autoMark==="◎") || scored[0];
-    if (!main) return { grade:"-", label:"判定待ち", ticket:"見送り", reason:"◎が決まると買い判定を表示します。", historyN:0, historyWins:0, historyWinRate:0, breakEven:null as number|null, main:null as any };
+    const scored=[...ranked].filter((h:any)=>h._selectionScore!==null).sort((a:any,b:any)=>Number(b._winScore??b._selectionScore)-Number(a._winScore??a._selectionScore));
+    const main=ranked.find((h:any)=>h._autoMark==="◎" && h.mark!=="消") || scored[0];
+    if(!main) return {grade:"-",label:"判定待ち",ticket:"見送り",reason:"◎が決まると買い判定を表示します。",historyN:0,historyWins:0,historyWinRate:0,breakEven:null as number|null,minOdds:null as number|null,main:null as any};
     const pop=num(main.ninki), odds=num(main.odds);
-    let historyN=0, historyWins=0;
+    let historyN=0,historyWins=0,overallN=0,overallWins=0,condN=0,condWins=0;
+    const distNow=Number(distance||0); const bucket=(d:number)=>d<=1400?"短":d<=1800?"中":d<=2200?"中長":"長";
     savedRaces.filter((r:any)=>r.status==='completed').forEach((r:any)=>{
-      const hs=r.horses||[];
-      if(resultTop3Of(r).length<3) return;
-      const explicit=hs.find((h:any)=>(h.mark||h._autoMark)==="◎");
+      const actual=resultTop3Of(r); if(actual.length<3)return;
+      const hs=r.horses||[]; const explicit=hs.find((h:any)=>(h.mark||h._autoMark)==="◎");
       const pred=[...hs].filter((h:any)=>num(h.predictedScore)!==null).sort((a:any,b:any)=>num(b.predictedScore)-num(a.predictedScore));
-      const h=explicit || pred[0];
-      if(!h) return;
-      const hp=num(h.ninki);
-      if(hp===null || hp<1 || hp>3) return;
-      historyN++;
-      if(num(h.finish)===1) historyWins++;
+      const h=explicit||pred[0]; if(!h)return;
+      overallN++; if(num(h.finish)===1)overallWins++;
+      const hp=num(h.ninki); if(hp!==null&&hp>=1&&hp<=3){historyN++;if(num(h.finish)===1)historyWins++;}
+      const sameCond=r.surface===surface && bucket(Number(r.distance||0))===bucket(distNow) && (r.raceClass===raceClass || !raceClass);
+      if(sameCond){condN++;if(num(h.finish)===1)condWins++;}
     });
-    const historyWinRate=historyN ? historyWins/historyN*100 : 0;
-    const breakEven=odds && odds>0 ? 100/odds : null;
-    const gap=scored[1] ? Number(main._selectionScore)-Number(scored[1]._selectionScore) : 0;
-    let grade="C", label="見送り寄り", ticket="見送り";
-    const reasons:string[]=[];
-    if(pop===null){ reasons.push("人気未入力のため最終判定できません"); }
-    else if(pop<=3){
-      grade = confidence.score>=65 && raceAnalytics.chaos<65 ? "A" : "B";
-      label = grade==="A" ? "単勝候補" : "単勝・条件付き";
-      ticket = `単勝 ${main.umaban}`;
-      reasons.push(`◎が${pop}番人気（過去実績で最も安定しているゾーン）`);
-    } else if(pop===4){
-      grade="C"; label="条件付き単勝"; ticket=`単勝 ${main.umaban}`;
-      reasons.push("◎4番人気は検証余地あり。買うなら単勝に限定");
-    } else {
-      grade="D"; label="原則見送り"; ticket="見送り";
-      reasons.push(`◎が${pop}番人気。過去検証では5番人気以下の◎は勝率が大きく低下`);
-    }
-    if(gap>=3) reasons.push(`◎と次点の指数差 ${gap.toFixed(1)}`);
-    else reasons.push(`上位指数差 ${gap.toFixed(1)}で接戦`);
-    if(raceAnalytics.chaos>=65) reasons.push(`波乱度${raceAnalytics.chaos}のため買い判定を抑制`);
-    if(dataQuality.score<65) reasons.push(`データ品質${dataQuality.score}のため慎重判定`);
-    if(pop!==null && pop<=3 && (raceAnalytics.chaos>=80 || dataQuality.score<45)) { grade="C"; label="見送り検討"; ticket="見送り"; }
-    if(breakEven!==null) reasons.push(`現在${odds?.toFixed(1)}倍 → 損益分岐勝率 約${breakEven.toFixed(1)}%`);
-    return { grade,label,ticket,reason:reasons.join(" / "),historyN,historyWins,historyWinRate,breakEven,main };
-  },[ranked,savedRaces,confidence,raceAnalytics,dataQuality]);
+    const historyWinRate=historyN?historyWins/historyN*100:0;
+    const overallRate=overallN?overallWins/overallN*100:25;
+    // 条件別は小標本を全体率へ縮小。過学習を防ぐ。
+    const shrunkCondRate=(condWins+overallRate/100*12)/(condN+12)*100;
+    const breakEven=odds&&odds>0?100/odds:null;
+    const conservativeRate=Math.max(5,Math.min(historyWinRate||overallRate,shrunkCondRate));
+    const minOdds=conservativeRate>0?100/conservativeRate:null;
+    const gap=scored[1]?Number(main._winScore??main._selectionScore)-Number(scored[1]._winScore??scored[1]._selectionScore):0;
+    let grade="C",label="見送り寄り",ticket="見送り"; const reasons:string[]=[];
+    if(pop===null) reasons.push("人気未入力のため最終判定できません");
+    else if(pop<=3){grade=confidence.score>=65&&raceAnalytics.chaos<65?"A":"B";label=grade==="A"?"単勝候補":"単勝・条件付き";ticket=`単勝 ${main.umaban}`;reasons.push(`◎が${pop}番人気`);}
+    else if(pop===4 && gap>=1.5){grade="C";label="条件付き単勝";ticket=`単勝 ${main.umaban}`;reasons.push("4番人気だが勝ち切りスコアに優位性あり");}
+    else {grade="D";label="原則見送り";ticket="見送り";reasons.push(`◎が${pop}番人気。人気薄◎の過大評価を抑制`);}
+    if(scored.length>=16){ if(grade==="A")grade="B"; else if(grade==="B")grade="C"; reasons.push("16頭以上は過去検証で候補捕捉が低下"); }
+    if(gap<1.0){ if(grade==="A")grade="B"; reasons.push(`上位が拮抗（差${gap.toFixed(1)}）`); } else reasons.push(`◎と次点の勝ち切り差 ${gap.toFixed(1)}`);
+    if(raceAnalytics.chaos>=70){ if(grade==="A")grade="B"; if(grade==="B")grade="C"; reasons.push(`波乱度${raceAnalytics.chaos}`); }
+    if(dataQuality.score<55){grade="C";ticket="見送り";label="データ不足・見送り";reasons.push(`データ品質${dataQuality.score}`);}
+    if(minOdds!==null) reasons.push(`推定必要オッズ 約${minOdds.toFixed(1)}倍以上（条件実績を小標本補正）`);
+    if(odds!==null&&minOdds!==null&&odds<minOdds&&grade!=="D"){ if(grade==="A")grade="B"; reasons.push(`現在${odds.toFixed(1)}倍は必要オッズを下回る`); }
+    if(grade==="C"||grade==="D") ticket="見送り";
+    return {grade,label,ticket,reason:reasons.join(" / "),historyN,historyWins,historyWinRate,breakEven,minOdds,condN,condRate:shrunkCondRate,main};
+  },[ranked,savedRaces,confidence,raceAnalytics,dataQuality,surface,distance,raceClass]);
 
   const buildReview = (race:any) => {
     const all=(race?.horses||[]);
@@ -3101,7 +3104,7 @@ export default function JRAPredictionTool() {
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
             <div className="rounded-lg bg-indigo-50 p-2"><div className="text-[10px] text-indigo-600">過去 ◎1〜3人気</div><div className="mt-0.5 font-black text-indigo-900">勝率 {buyDecision.historyN ? buyDecision.historyWinRate.toFixed(1) : "-"}% <span className="text-[9px] font-normal">({buyDecision.historyWins}/{buyDecision.historyN})</span></div></div>
-            <div className="rounded-lg bg-amber-50 p-2"><div className="text-[10px] text-amber-700">現在オッズの損益分岐</div><div className="mt-0.5 font-black text-amber-900">{buyDecision.breakEven!==null ? `${buyDecision.breakEven.toFixed(1)}%` : "オッズ入力待ち"}</div></div>
+            <div className="rounded-lg bg-amber-50 p-2"><div className="text-[10px] text-amber-700">必要オッズ / 現在の損益分岐</div><div className="mt-0.5 font-black text-amber-900">{buyDecision.minOdds!==null ? `${buyDecision.minOdds.toFixed(1)}倍〜` : "-"} <span className="text-[9px] font-normal">{buyDecision.breakEven!==null ? `/ ${buyDecision.breakEven.toFixed(1)}%` : ""}</span></div></div>
           </div>
           <div className="mt-2 text-[10px] leading-relaxed text-gray-400">※過去成績は保存済み結果から自動集計。払戻データを使った回収率保証ではありません。3連系は相手抜けが残るため通常は推奨しません。</div>
         </div>
