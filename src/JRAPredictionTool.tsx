@@ -566,6 +566,23 @@ export default function JRAPredictionTool() {
     }
   };
 
+  // 次レース開始時は「作業中のレース」だけを完全に初期化する。
+  // 保存済みレース・学習済みウェイト・学習履歴には一切触れない。
+  const startNewRace = (showMessage = true) => {
+    setRaceName("");
+    setDistance("");
+    setPaceType("M");
+    setHorses([]);
+    setActiveSavedRaceId(null);
+    setResultEntryMode(false);
+    setResultOrderInput("");
+    setBulkText("");
+    setScanText({ race: "", standard: "", recent: "", pace: "", comment: "", training: "", details: "" });
+    setBodyWeightText("");
+    setExportText("");
+    if (showMessage) flash("新しいレースの入力状態に切り替えました（保存履歴・学習データは保持）");
+  };
+
   // ---- 一括貼り付け ----
   // 想定列順(1頭16項目): 馬番,予想印,馬名,全体,スタート,追走,上がり,5走平均,距離,コース,3走,2走,前走,性齢,斤量,騎手
   const COLS = 16;
@@ -2395,8 +2412,13 @@ export default function JRAPredictionTool() {
     };
 
     const fieldSize=winSorted.length;
-    // 解析結果に基づき印の乱発を防止。多頭数で絞れない時は買い判定を下げ、印を無制限に増やさない。
-    const supportCount = fieldSize<=10 ? 1 : fieldSize<=13 ? 2 : fieldSize<=15 ? 2 : 3;
+    // 実戦フィードバック対応: v3.11.0 は印を絞りすぎて相手抜けが増えたため、
+    // 基本候補数を1頭ずつ戻す。ただし以前のように12頭で8〜9頭へ無制限に広げない。
+    // 上位が拮抗しているレースだけ、ヒモ抜け防止でさらに1頭追加する。
+    const baseSupportCount = fieldSize<=10 ? 2 : fieldSize<=13 ? 3 : fieldSize<=15 ? 3 : 4;
+    const fifthGap = winSorted[0] && winSorted[4] ? winScore(winSorted[0]) - winScore(winSorted[4]) : 99;
+    const crowdedExtra = fieldSize>=11 && fifthGap < 7 ? 1 : 0;
+    const supportCount = Math.min(Math.max(0, fieldSize-3), baseSupportCount + crowdedExtra);
     const support=winSorted.filter(h=>!top3Ids.has(h.id))
       .map(h=>({h,rescue:supportScore(h)}))
       .sort((a,b)=>b.rescue-a.rescue || winScore(b.h)-winScore(a.h))
@@ -2814,11 +2836,12 @@ export default function JRAPredictionTool() {
     updated.learningChanges = changes;
     updated.horses = raceHorses.map((h:any) => ({ ...sanitizeHorseRecord(h), mark: h._autoMark || "", predictedScore: h._selectionScore ?? h._finalScore, finish: h.finish || "" }));
     updated.review = buildReview(updated);
-    setHorses(raceHorses.map((h:any)=>sanitizeHorseRecord(h)));
     setSavedRaces((prev) => [updated, ...prev.filter((r) => r.id !== raceId)]);
-    setResultEntryMode(false);
+    // 結果確定後は前レースの馬・貼り付けテキストを次レースへ持ち越さない。
+    // 完了レース本体は savedRaces に残るため、後から「予想を見る」「AI回顧」で確認できる。
+    startNewRace(false);
     setSavedRacesOpen(true);
-    flash(canLearn ? `結果${order.join("-")}を保存し、${Object.keys(changes).length}項目を学習しました` : `結果${order.join("-")}を保存しました`);
+    flash(canLearn ? `結果${order.join("-")}を保存・学習しました。次レース用に入力欄を初期化しました` : `結果${order.join("-")}を保存しました。次レース用に入力欄を初期化しました`);
   };
 
   const relearnAllCompleted = () => {
@@ -3021,6 +3044,7 @@ export default function JRAPredictionTool() {
       </div>
 
       <div className="mx-3 mt-3 rounded-xl border border-gray-200 bg-white p-3 shadow-sm"><div className="mb-2 text-xs font-black text-gray-700">すぐ使う操作</div><div className="flex flex-wrap gap-2">
+        <button onClick={() => { if (!horses.length || confirm("現在の作業中レースをクリアして、新しいレースを始めますか？\n※保存済みレース・学習履歴は消えません。")) startNewRace(true); }} className="bg-blue-900 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">＋ 新しいレース</button>
         <button onClick={addHorse} className="bg-blue-700 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">＋ 1頭追加</button>
         <button onClick={() => setImportOpen((v) => !v)} className="bg-white border border-gray-300 text-xs font-bold px-3 py-2 rounded shadow-sm">一括貼り付け</button>
         <button onClick={doExport} className="bg-white border border-gray-300 text-xs font-bold px-3 py-2 rounded shadow-sm">JSON書き出し</button>
