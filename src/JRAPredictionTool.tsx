@@ -2415,10 +2415,12 @@ export default function JRAPredictionTool() {
     // 実戦フィードバック対応: v3.11.0 は印を絞りすぎて相手抜けが増えたため、
     // 基本候補数を1頭ずつ戻す。ただし以前のように12頭で8〜9頭へ無制限に広げない。
     // 上位が拮抗しているレースだけ、ヒモ抜け防止でさらに1頭追加する。
-    const baseSupportCount = fieldSize<=10 ? 2 : fieldSize<=13 ? 3 : fieldSize<=15 ? 3 : 4;
-    const fifthGap = winSorted[0] && winSorted[4] ? winScore(winSorted[0]) - winScore(winSorted[4]) : 99;
-    const crowdedExtra = fieldSize>=11 && fifthGap < 7 ? 1 : 0;
-    const supportCount = Math.min(Math.max(0, fieldSize-3), baseSupportCount + crowdedExtra);
+    // 10/3 実戦検証: 5頭前後では3頭目の取りこぼしが多かったため、◎○▲は維持したまま相手枠を戻す。
+    // 総印数の目安は <=9頭:5、10〜13頭:6、14〜18頭:7。16頭以上かつ上位が極端に拮抗時のみ8頭まで。
+    const targetMarkedCount = fieldSize<=9 ? 5 : fieldSize<=13 ? 6 : 7;
+    const seventhGap = winSorted[0] && winSorted[6] ? winScore(winSorted[0]) - winScore(winSorted[6]) : 99;
+    const crowdedExtra = fieldSize>=16 && seventhGap < 6 ? 1 : 0;
+    const supportCount = Math.min(Math.max(0, fieldSize-3), Math.max(0, targetMarkedCount-3) + crowdedExtra);
     const support=winSorted.filter(h=>!top3Ids.has(h.id))
       .map(h=>({h,rescue:supportScore(h)}))
       .sort((a,b)=>b.rescue-a.rescue || winScore(b.h)-winScore(a.h))
@@ -2981,17 +2983,23 @@ export default function JRAPredictionTool() {
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <button onClick={()=>{
-              // 部分的にしか解析できなかった入力で既存の全頭データを消さない。
-              // 以前は「出馬表」があるだけで [] から作り直していたため、解析に2頭しか
-              // 成功しないと horses 自体が2頭へ縮むことがあった。
+              // 「出馬表」はそのレースのマスターとして扱う。前レースの horses を土台にすると、
+              // 次レースで馬番が同じだけの別馬へ指数・コメント等が残るため、まず空配列から構築する。
+              // 解析が5頭未満しか成功しなかった場合だけ反映を止め、既存データ自体は保護する。
               const before = horses.map(h=>({...h}));
               const usableBefore = before.filter((h)=>h.umaban && h.name && !["--","取消","馬名"].includes(String(h.name).trim()));
-              // 既に壊れて1〜4頭しかない current state は引き継がず、この入力から再構築する。
-              let next = (before.length > 0 && usableBefore.length < 5) ? [] : before.map(h=>({...h}));
+              let next = before.map(h=>({...h}));
               if(scanText.race) {
-                next=parseRaceText(scanText.race,next);
+                let fresh:any[] = [];
+                fresh=parseRaceText(scanText.race,fresh);
                 // 通常の出馬表欄へ詳細版を貼った場合も自動で拾う。
-                next=parseDetailRaceText(scanText.race,next);
+                fresh=parseDetailRaceText(scanText.race,fresh);
+                const freshValid=fresh.filter((h:any)=>h.umaban && h.name && !["--","取消","馬名"].includes(String(h.name).trim()));
+                if(freshValid.length>0 && freshValid.length<5){
+                  flash(`⚠️ 出馬表から${freshValid.length}頭しか認識できませんでした。前レース混入防止のため反映を中止しました`);
+                  return;
+                }
+                if(freshValid.length>=5) next=fresh;
               }
               if(scanText.standard) next=parseIndexText(scanText.standard,next,false);
               if(scanText.recent) next=parseIndexText(scanText.recent,next,true);
