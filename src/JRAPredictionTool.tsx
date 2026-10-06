@@ -2389,7 +2389,24 @@ export default function JRAPredictionTool() {
       if(pop!==null && pop>=4 && abilityTop-ability<0.8) market*=0.55;
       return ability + fit + recent + market;
     };
-    const winSorted=[...withScore].sort((a,b)=>winScore(b)-winScore(a));
+    // 勝ち切り順位。市場は「人気馬を自動で◎にする」のではなく、僅差時だけ逆張り◎を抑える安全弁として使う。
+    let winSorted=[...withScore].sort((a,b)=>winScore(b)-winScore(a));
+    if(winSorted.length>=2){
+      const leader=winSorted[0];
+      const leaderPop=num(leader.ninki);
+      const popularChallenger=winSorted
+        .slice(1,4)
+        .filter((h:any)=>{ const p=num(h.ninki); return p!==null && p<=3; })
+        .sort((a:any,b:any)=>winScore(b)-winScore(a))[0];
+      if(leaderPop!==null && leaderPop>=4 && popularChallenger){
+        const margin=winScore(leader)-winScore(popularChallenger);
+        // 10/4検証: 人気薄AI1位と1〜3人気のAI2〜3位が僅差なら、逆張りに十分な根拠がないと判断。
+        // 1.5点以上の明確な優位がある時は従来どおり人気薄◎を許容する。
+        if(margin < 1.5){
+          winSorted=[popularChallenger,...winSorted.filter((h:any)=>h.id!==popularChallenger.id)];
+        }
+      }
+    }
     const rankMap=new Map(winSorted.map((h,i)=>[h.id,i]));
     const top3Ids=new Set(winSorted.slice(0,3).map(h=>h.id));
 
@@ -2418,13 +2435,17 @@ export default function JRAPredictionTool() {
     // 10/3 実戦検証: 5頭前後では3頭目の取りこぼしが多かったため、◎○▲は維持したまま相手枠を戻す。
     // 総印数の目安は <=9頭:5、10〜13頭:6、14〜18頭:7。16頭以上かつ上位が極端に拮抗時のみ8頭まで。
     const targetMarkedCount = fieldSize<=9 ? 5 : fieldSize<=13 ? 6 : 7;
-    const seventhGap = winSorted[0] && winSorted[6] ? winScore(winSorted[0]) - winScore(winSorted[6]) : 99;
-    const crowdedExtra = fieldSize>=16 && seventhGap < 6 ? 1 : 0;
-    const supportCount = Math.min(Math.max(0, fieldSize-3), Math.max(0, targetMarkedCount-3) + crowdedExtra);
-    const support=winSorted.filter(h=>!top3Ids.has(h.id))
+    const baseSupportCount = Math.min(Math.max(0, fieldSize-3), Math.max(0, targetMarkedCount-3));
+    const supportCandidates=winSorted.filter(h=>!top3Ids.has(h.id))
       .map(h=>({h,rescue:supportScore(h)}))
-      .sort((a,b)=>b.rescue-a.rescue || winScore(b.h)-winScore(a.h))
-      .slice(0,supportCount).map(x=>x.h);
+      .sort((a,b)=>b.rescue-a.rescue || winScore(b.h)-winScore(a.h));
+    // 印の境界だけ可変化。7頭目と8頭目（小頭数なら最終印と次点）がほぼ同評価なら1頭だけ追加。
+    // 一律8頭にはせず、相手専用スコア差が0.9以内の時だけヒモ抜け防止を行う。
+    const boundaryIn=supportCandidates[baseSupportCount-1];
+    const boundaryOut=supportCandidates[baseSupportCount];
+    const boundaryExtra = boundaryIn && boundaryOut && (boundaryIn.rescue-boundaryOut.rescue)<=0.9 ? 1 : 0;
+    const supportCount = Math.min(supportCandidates.length, baseSupportCount + boundaryExtra);
+    const support=supportCandidates.slice(0,supportCount).map(x=>x.h);
     const supportMark=new Map(support.map((h,i)=>[h.id,i===support.length-1?"☆":"△"]));
 
     return computed.map((h:any)=>{
@@ -2624,7 +2645,10 @@ export default function JRAPredictionTool() {
     else if(pop===4 && gap>=1.5){grade="C";label="条件付き単勝";ticket=`単勝 ${main.umaban}`;reasons.push("4番人気だが勝ち切りスコアに優位性あり");}
     else {grade="D";label="原則見送り";ticket="見送り";reasons.push(`◎が${pop}番人気。人気薄◎の過大評価を抑制`);}
     if(scored.length>=16){ if(grade==="A")grade="B"; else if(grade==="B")grade="C"; reasons.push("16頭以上は過去検証で候補捕捉が低下"); }
-    if(gap<1.0){ if(grade==="A")grade="B"; reasons.push(`上位が拮抗（差${gap.toFixed(1)}）`); } else reasons.push(`◎と次点の勝ち切り差 ${gap.toFixed(1)}`);
+    // 10/4検証: ◎と○が1〜2点差のレースは勝ち馬の入れ替わりが目立ったため、単独◎の信頼度を下げる。
+    if(gap<1.0){ if(grade==="A")grade="B"; else if(grade==="B")grade="C"; reasons.push(`◎○ほぼ互角（勝ち切り差${gap.toFixed(1)}）`); }
+    else if(gap<2.0){ if(grade==="A")grade="B"; reasons.push(`◎○が僅差（勝ち切り差${gap.toFixed(1)}）。単独◎の信頼度を下げる`); }
+    else reasons.push(`◎と次点の勝ち切り差 ${gap.toFixed(1)}`);
     if(raceAnalytics.chaos>=70){ if(grade==="A")grade="B"; if(grade==="B")grade="C"; reasons.push(`波乱度${raceAnalytics.chaos}`); }
     if(dataQuality.score<55){grade="C";ticket="見送り";label="データ不足・見送り";reasons.push(`データ品質${dataQuality.score}`);}
     if(minOdds!==null) reasons.push(`推定必要オッズ 約${minOdds.toFixed(1)}倍以上（条件実績を小標本補正）`);
