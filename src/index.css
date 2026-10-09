@@ -7,3 +7,43 @@ html { scroll-behavior: smooth; }
 body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans JP", sans-serif; }
 button, input, select, textarea { font: inherit; }
 input, select, textarea { outline: none; }
+
+/* v3.12.0 - unified dark dashboard */
+body { background: #050b16; color: #e5edf7; }
+.dark-app { background: radial-gradient(circle at top, #0f1b31 0, #07111f 38%, #050b16 100%); color: #e5edf7; }
+.dark-app .bg-white { background-color: #0f172a !important; }
+.dark-app .bg-gray-100, .dark-app .bg-gray-50 { background-color: #111c2f !important; }
+.dark-app .bg-slate-50 { background-color: #111827 !important; }
+.dark-app .bg-indigo-50 { background-color: rgba(49,46,129,.22) !important; }
+.dark-app .bg-violet-50 { background-color: rgba(76,29,149,.22) !important; }
+.dark-app .bg-emerald-50 { background-color: rgba(6,78,59,.25) !important; }
+.dark-app .bg-sky-50 { background-color: rgba(12,74,110,.25) !important; }
+.dark-app .bg-amber-50 { background-color: rgba(120,53,15,.24) !important; }
+.dark-app .bg-rose-50 { background-color: rgba(136,19,55,.22) !important; }
+.dark-app .bg-amber-100 { background-color: rgba(146,64,14,.34) !important; }
+.dark-app .bg-green-100 { background-color: rgba(20,83,45,.35) !important; }
+.dark-app .bg-slate-100 { background-color: #1e293b !important; }
+.dark-app .border-gray-100, .dark-app .border-gray-200, .dark-app .border-gray-300 { border-color: #334155 !important; }
+.dark-app .border-slate-200 { border-color: #334155 !important; }
+.dark-app .text-gray-900, .dark-app .text-slate-900, .dark-app .text-gray-800, .dark-app .text-slate-800 { color: #f8fafc !important; }
+.dark-app .text-gray-700, .dark-app .text-slate-700, .dark-app .text-gray-600, .dark-app .text-slate-600 { color: #cbd5e1 !important; }
+.dark-app .text-gray-500, .dark-app .text-slate-500 { color: #94a3b8 !important; }
+.dark-app .text-gray-400, .dark-app .text-slate-400 { color: #64748b !important; }
+.dark-app input:not([type="range"]):not([type="checkbox"]), .dark-app textarea, .dark-app select { background-color: #0b1220 !important; color: #e2e8f0 !important; border-color: #334155 !important; }
+.dark-app input::placeholder, .dark-app textarea::placeholder { color: #64748b !important; }
+.dark-app select option { background: #0b1220; color: #e2e8f0; }
+.dark-app table { color: #dbeafe; }
+.dark-app thead tr { background-color: #111c2f !important; }
+.dark-app tbody tr:hover { background-color: rgba(30,41,59,.7) !important; }
+.dark-app .shadow-sm, .dark-app .shadow-md { box-shadow: 0 10px 30px rgba(0,0,0,.22) !important; }
+.dark-app button { transition: transform .12s ease, filter .12s ease, border-color .12s ease; }
+.dark-app button:active { transform: scale(.985); }
+.dark-app .sticky.bg-white\/95 { background-color: rgba(7,17,31,.94) !important; border-color: #26364f !important; }
+.dark-app .bg-gray-900 { background-color: #07111f !important; }
+
+.dark-app .bg-blue-50, .dark-app .bg-blue-100 { background-color: rgba(30,64,175,.24) !important; }
+.dark-app .bg-indigo-100 { background-color: rgba(67,56,202,.24) !important; }
+.dark-app .bg-emerald-100 { background-color: rgba(5,150,105,.22) !important; }
+.dark-app .bg-sky-100 { background-color: rgba(14,116,144,.22) !important; }
+.dark-app .bg-violet-100 { background-color: rgba(109,40,217,.22) !important; }
+.dark-app .bg-rose-100 { background-color: rgba(190,24,93,.22) !important; }

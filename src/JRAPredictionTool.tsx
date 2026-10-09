@@ -311,6 +311,7 @@ export default function JRAPredictionTool() {
   const [analysisTab, setAnalysisTab] = useState<"review"|"conditions"|"backtest"|"misses">("review");
   const [resultOrderInput, setResultOrderInput] = useState("");
   const [learningHistory, setLearningHistory] = useState<any[]>([]);
+  const [flowScenario, setFlowScenario] = useState<"main"|"alt">("main");
 
   // ---- 永続化 ----
   useEffect(() => {
@@ -479,7 +480,7 @@ export default function JRAPredictionTool() {
   const exportFullBackup = () => {
     const payload = {
       type: "jra-ai-full-backup",
-      version: "3.10.9",
+      version: "3.12.0",
       exportedAt: new Date().toISOString(),
       state: {
         raceName, track, surface, distance, going, raceClass, paceType,
@@ -2503,6 +2504,105 @@ export default function JRAPredictionTool() {
     return { chaos, label, reasons, marked, bets };
   }, [ranked, paceType]);
 
+  // ---- AI展開予想（印とは独立した別エンジン） ----
+  // 印順位をそのまま並べるのではなく、各地点で重視する要素を変えて隊列を推定する。
+  const flowPrediction = useMemo(() => {
+    const runners = ranked.filter((h:any)=>h.umaban && (h.name || h._finalScore !== null));
+    if (!runners.length) return null;
+    const n=runners.length;
+    const values=(key:string)=>runners.map((h:any)=>num(h[key])).filter((v:any)=>v!==null) as number[];
+    const percentile=(value:any, vals:number[])=>{
+      const v=num(value); if(v===null || !vals.length) return 0.5;
+      return vals.filter(x=>x<=v).length/vals.length;
+    };
+    const vStart=values('_start'), vChase=values('_oikake'), vAgari=values('_agari'), vBest=values('_best'), vAvg=values('_avg5'), vR1=values('_r1');
+    const vDist=values('_detailDistanceFit'), vCourse=values('_detailCourseFit'), vGround=values('_detailGroundFit'), vJockey=values('_jockeyIndex'), vGate=values('_gateFit'), vCond=values('_condition'), vTrain=values('_trainingScore');
+    const styleLead:Record<string,number>={"逃":1,"先":0.74,"差":0.36,"追":0.08};
+    const paddock:Record<string,number>={S:1,A:0.82,B:0.58,C:0.35,D:0.12};
+    const d=Number(distance)||0;
+    const sprint=d>0&&d<=1400, long=d>=2200;
+    const frontCount=runners.filter((h:any)=>['逃','先'].includes(h.runningStyle)).length;
+    const escapeCount=runners.filter((h:any)=>h.runningStyle==='逃').length;
+    const fastStart=runners.filter((h:any)=>percentile(h._start,vStart)>=0.75).length;
+    const autoPaceScore=escapeCount*16 + Math.max(0,frontCount-Math.ceil(n*0.38))*5 + fastStart*2 + (sprint?8:0) + (surface==='ダート'?4:0);
+    const autoPace=autoPaceScore>=48?'H':autoPaceScore>=25?'M':'S';
+    // 手動ペース入力も一要素として残す。ただし展開AI自身の判定が異なる時は併記する。
+    const pace=paceType || autoPace;
+    const paceFactor=pace==='H'?1:pace==='S'?-1:0;
+    const totalStarters=Math.max(...runners.map((x:any)=>Number(x.umaban)||0), n);
+    const commentBias=(txt:string)=>{
+      const t=String(txt||'');
+      if(/(?:ハナ|逃げ|前へ|積極|先手|先行)/.test(t)) return 0.9;
+      if(/(?:控え|溜め|末脚|差し|終い|しまい)/.test(t)) return -0.55;
+      return 0;
+    };
+    const baseRows=runners.map((h:any)=>{
+      const style=styleLead[h.runningStyle] ?? 0.55;
+      const corner=num(h.cornerAvg);
+      const cornerLead=corner===null?0.5:clamp(1-(corner-1)/Math.max(8,n),0,1);
+      const start=percentile(h._start,vStart), chase=percentile(h._oikake,vChase), agari=percentile(h._agari,vAgari);
+      const best=percentile(h._best,vBest), avg=percentile(h._avg5,vAvg), recent=percentile(h._r1,vR1);
+      const distFit=percentile(h._detailDistanceFit,vDist), courseFit=percentile(h._detailCourseFit,vCourse), groundFit=percentile(h._detailGroundFit,vGround);
+      const jockey=percentile(h._jockeyIndex,vJockey), gate=percentile(h._gateFit,vGate), condition=percentile(h._condition,vCond), training=percentile(h._trainingScore,vTrain);
+      const pad=paddock[String(h.paddockGrade||'').toUpperCase()] ?? 0.5;
+      const body=num(h._bodyChange); const bodyStability=body===null?0.5:clamp(1-Math.max(0,Math.abs(body)-4)/28,0,1);
+      const rest=num(h.restWeeks); const restReadiness=rest===null?0.5:rest<=12?0.62:rest<=24?0.5:0.42;
+      const surfaceSwitchAdj=h.surfaceSwitch ? (Number(h.surfaceRunNo||0)===1?-0.05:-0.015) : 0;
+      const cBias=commentBias(h.comment||'');
+      const waku=wakuOf(h.umaban,totalStarters) || 4;
+      const inside=1-(waku-1)/7;
+      const ability=(best*0.28+avg*0.24+recent*0.18+distFit*0.14+courseFit*0.09+groundFit*0.07);
+      // スタート直後: 脚質・ST・過去通過位置・枠・騎手・コメントを最重視。
+      const startStage=style*34+start*25+cornerLead*16+gate*7+jockey*5+inside*(sprint?6:3)+training*3+condition*2+bodyStability*1.5+restReadiness*1.5+cBias*5+surfaceSwitchAdj*10;
+      // 向正面: 前半位置を引き継ぎつつ追走・距離・馬場・折り合いを反映。
+      const cruiseStage=startStage*0.54+chase*22+distFit*8+groundFit*4+condition*4+jockey*3+training*2+pad*1.5+restReadiness*1.5-(paceFactor>0?style*5:paceFactor<0?(1-style)*3:0);
+      // 3〜4角: 追走力、上がり準備、コース適性、外回しロスを重視。
+      const turnStage=cruiseStage*0.50+chase*13+agari*12+courseFit*8+distFit*5+jockey*4+condition*3+training*2+pad*1.5+inside*1.5-(paceFactor>0?style*4:0);
+      // ゴール前: 末脚・基礎能力・近走・消耗度を重視。人気/印は使わない。
+      const earlyUse=clamp((style*0.55+start*0.25+cornerLead*0.20) * (pace==='H'?1.15:pace==='S'?0.82:1),0,1.2);
+      const finishStage=turnStage*0.28+agari*(long?25:sprint?16:21)+ability*30+distFit*7+groundFit*3+condition*4+training*2+pad*1.5+bodyStability*1.5-earlyUse*(pace==='H'?11:pace==='M'?6:3);
+      return {...h,_flow:{style,start,chase,agari,best,avg,recent,distFit,courseFit,groundFit,jockey,gate,condition,training,pad,bodyStability,restReadiness,inside,startStage,cruiseStage,turnStage,finishStage,cBias}};
+    });
+    const stageOrder=(key:string, alt=false)=>[...baseRows].sort((a:any,b:any)=>{
+      let av=Number(a._flow[key]), bv=Number(b._flow[key]);
+      if(alt){
+        // 対抗シナリオ: スタートのブレと差し進出を少し大きくし、同じ印順位の焼き直しを避ける。
+        av += (a._flow.start-0.5)*3 - (a._flow.style-0.5)*2 + (a._flow.agari-0.5)*(key==='finishStage'?5:2);
+        bv += (b._flow.start-0.5)*3 - (b._flow.style-0.5)*2 + (b._flow.agari-0.5)*(key==='finishStage'?5:2);
+      }
+      return bv-av || Number(a.umaban)-Number(b.umaban);
+    });
+    const keys=[['スタート直後','startStage'],['向正面','cruiseStage'],['3〜4角','turnStage'],['ゴール前','finishStage']] as const;
+    const makeStages=(alt=false)=>keys.map(([label,key],i)=>({label,key,confidence:Math.max(58,90-i*7-(n>=16?5:0)-(alt?5:0)),horses:stageOrder(key,alt)}));
+    const mainStages=makeStages(false), altStages=makeStages(true);
+    const finish=mainStages[3].horses;
+    const flowRank=new Map(finish.map((h:any,i:number)=>[h.id,i+1]));
+    const advantage=[...baseRows].map((h:any)=>{
+      const raw=(h._flow.finishStage-h._flow.turnStage)*0.35 + h._flow.agari*5 + (pace==='H'?(1-h._flow.style)*3:h._flow.style*1.5);
+      return {...h,_flowEdge:raw,_flowRank:flowRank.get(h.id)};
+    }).sort((a:any,b:any)=>b._flowEdge-a._flowEdge);
+    const disadvantages=[...advantage].sort((a:any,b:any)=>a._flowEdge-b._flowEdge);
+    const leader=mainStages[0].horses[0], mover=mainStages[2].horses[0], finisher=finish[0];
+    const narrative=`${pace}ペース想定（展開AI独自判定 ${autoPace}${autoPace!==pace?` / 入力 ${pace}`:''}）。序盤は${leader?`${leader.umaban} ${leader.name}`:'先行勢'}が前を取りやすく、3〜4角では${mover?`${mover.umaban} ${mover.name}`:'追走力上位'}の進出を予測。ゴール前は${finisher?`${finisher.umaban} ${finisher.name}`:'末脚上位'}が最も浮上しやすい。`;
+    return {pace,autoPace,mainStages,altStages,advantages:advantage.slice(0,3),disadvantages:disadvantages.slice(0,3),flowRank,narrative};
+  },[ranked,track,surface,distance,going,paceType]);
+
+  const flowReason = (h:any) => {
+    if(!h?._flow) return '';
+    const f=h._flow; const bits:string[]=[];
+    if(f.start>=0.72) bits.push('スタート指数上位');
+    if(f.style>=0.7) bits.push('前向きな脚質');
+    if(f.chase>=0.72) bits.push('追走力上位');
+    if(f.agari>=0.72) bits.push('上がり上位');
+    if(f.distFit>=0.68) bits.push('距離適性');
+    if(f.courseFit>=0.68) bits.push('コース適性');
+    if(f.condition>=0.68) bits.push('状態面');
+    if(f.training>=0.75) bits.push('調教良好');
+    if(f.cBias>0.2) bits.push('コメントから前進気勢');
+    if(f.cBias<0) bits.push('溜める示唆');
+    return bits.slice(0,4).join('・') || '脚質・近走・適性を総合';
+  };
+
   const parseResultOrder = (raw: string) => {
     const nums = String(raw || "").match(/\d{1,2}/g)?.map(Number) || [];
     if (nums.length !== 3) return { ok: false as const, message: "1着-2着-3着の馬番を3頭入力してください（例: 3-11-5）", order: [] as number[] };
@@ -2759,6 +2859,7 @@ export default function JRAPredictionTool() {
     oddsStrength,
     confidenceSnapshot: confidence,
     dataQualitySnapshot: dataQuality,
+    flowSnapshot: flowPrediction ? { pace: flowPrediction.pace, autoPace: flowPrediction.autoPace, narrative: flowPrediction.narrative, stages: flowPrediction.mainStages.map((s:any)=>({label:s.label,confidence:s.confidence,horses:s.horses.map((h:any)=>({umaban:h.umaban,name:h.name}))})) } : null,
     horses: ranked.map((h) => ({ ...sanitizeHorseRecord(h), mark: h._autoMark || "", predictedScore: h._selectionScore ?? h._finalScore })),
     status: previous.status || "pending",
     savedAt: previous.savedAt || new Date().toISOString(),
@@ -2908,7 +3009,7 @@ export default function JRAPredictionTool() {
   const cellBase = "px-2 py-1.5 text-sm text-center border-b border-gray-100 whitespace-nowrap";
 
   return (
-    <div className="min-h-screen bg-gray-100 text-gray-900 pb-16">
+    <div className="dark-app min-h-screen bg-slate-950 text-slate-100 pb-16">
       {/* ヘッダー */}
       <div className="bg-gray-900 text-white px-3 py-3 flex items-center justify-between sticky top-0 z-20">
         <div className="flex items-center gap-2">
@@ -2925,6 +3026,7 @@ export default function JRAPredictionTool() {
           <button onClick={()=>scrollToSection("horse-evaluation")} className="shrink-0 rounded-full bg-blue-100 px-3 py-1.5 text-[11px] font-black text-blue-800">③ 全頭評価</button>
           <button onClick={()=>scrollToSection("buy-decision")} className="shrink-0 rounded-full bg-emerald-100 px-3 py-1.5 text-[11px] font-black text-emerald-800">④ AI買い判定</button>
           <button onClick={()=>scrollToSection("marked-summary")} className="shrink-0 rounded-full bg-indigo-100 px-3 py-1.5 text-[11px] font-black text-indigo-800">⑤ 印・買い目</button>
+          <button onClick={()=>scrollToSection("race-flow")} className="shrink-0 rounded-full bg-violet-950/80 px-3 py-1.5 text-[11px] font-black text-violet-200 border border-violet-700">⑥ 展開</button>
         </div>
       </div>
 
@@ -3183,6 +3285,73 @@ export default function JRAPredictionTool() {
             <div className="mt-2 space-y-1 text-[11px] text-gray-600">{raceAnalytics.reasons.slice(0,4).map((r)=><div key={r}>・{r}</div>)}</div>
             {raceAnalytics.bets.length > 0 && <div className="mt-3 rounded-lg bg-amber-50 p-2"><div className="text-[11px] font-black text-amber-900">参考買い目</div>{raceAnalytics.bets.map((b)=><div key={b} className="mt-1 text-xs font-bold text-amber-800">{b}</div>)}</div>}
           </div>
+        </div>
+      )}
+
+      {/* AI展開予想図：印とは独立した展開エンジン */}
+      {flowPrediction && (
+        <div id="race-flow" className="mx-3 mt-3 scroll-mt-24 rounded-2xl border border-violet-800/70 bg-slate-900/95 p-4 shadow-xl shadow-violet-950/20">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-black tracking-[0.16em] text-violet-300">🏇 ORIGINAL RACE FLOW AI</div>
+              <div className="mt-1 text-xl font-black text-white">AI展開予想図</div>
+              <div className="mt-1 text-[10px] leading-relaxed text-slate-400">印予想とは別計算。脚質・通過位置・ST・追走・上がり・枠・コース・距離・馬場・騎手・調教・コメント・馬体・休養・近走を地点別に再配分します。</div>
+            </div>
+            <div className="rounded-xl border border-violet-700 bg-violet-950/60 px-4 py-2 text-center">
+              <div className="text-[10px] font-bold text-violet-300">想定ペース</div>
+              <div className="text-2xl font-black text-white">{flowPrediction.pace}</div>
+              <div className="text-[9px] text-slate-400">独自判定 {flowPrediction.autoPace}</div>
+            </div>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button onClick={()=>setFlowScenario('main')} className={`rounded-lg px-3 py-1.5 text-[11px] font-black ${flowScenario==='main'?'bg-violet-600 text-white':'border border-slate-700 bg-slate-800 text-slate-300'}`}>本線シナリオ</button>
+            <button onClick={()=>setFlowScenario('alt')} className={`rounded-lg px-3 py-1.5 text-[11px] font-black ${flowScenario==='alt'?'bg-fuchsia-600 text-white':'border border-slate-700 bg-slate-800 text-slate-300'}`}>対抗シナリオ</button>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {(flowScenario==='main'?flowPrediction.mainStages:flowPrediction.altStages).map((stage:any,stageIdx:number)=>{
+              const total=Math.max(...stage.horses.map((x:any)=>Number(x.umaban)||0),stage.horses.length);
+              return <div key={stage.label} className="overflow-hidden rounded-xl border border-slate-700 bg-[#08111f]">
+                <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
+                  <div className="font-black text-slate-100">{stage.label} <span className="ml-1 text-[10px] font-normal text-slate-500">進行方向 ←</span></div>
+                  <div className="text-[10px] text-slate-400">信頼度 <span className="font-black text-cyan-300">{stage.confidence}</span></div>
+                </div>
+                <div className="relative h-[112px] overflow-hidden bg-[linear-gradient(90deg,rgba(15,23,42,.15),rgba(30,41,59,.35)),repeating-linear-gradient(0deg,transparent,transparent_36px,rgba(148,163,184,.08)_37px)]">
+                  <div className="absolute inset-y-0 left-[6%] border-l border-dashed border-cyan-500/30" />
+                  <div className="absolute bottom-1 left-2 text-[9px] text-cyan-500/60">前</div><div className="absolute bottom-1 right-2 text-[9px] text-slate-600">後</div>
+                  {stage.horses.map((h:any,i:number)=>{
+                    const w=wakuOf(h.umaban,total)||4; const wc=WAKU_COLORS[w];
+                    const left=6+(i/Math.max(1,stage.horses.length-1))*86;
+                    const lane=((Number(h.umaban)||i)%3)*30+9;
+                    return <button key={`${stage.label}-${h.id}`} title={`${h.umaban} ${h.name}｜${flowReason(h)}`} className="absolute -translate-x-1/2 rounded-full border-2 shadow-lg transition-transform hover:scale-110" style={{left:`${left}%`,top:`${lane}px`,background:wc.bg,color:wc.text,borderColor:wc.border,width:'28px',height:'28px',fontSize:'11px',fontWeight:900}}>{h.umaban}</button>
+                  })}
+                </div>
+                <div className="flex gap-1 overflow-x-auto border-t border-slate-800 px-2 py-2">
+                  {stage.horses.slice(0,6).map((h:any,i:number)=><span key={`order-${stage.label}-${h.id}`} className="shrink-0 rounded-md bg-slate-800 px-2 py-1 text-[9px] text-slate-300"><b className="text-white">{i+1}</b> {h.umaban} {h.name}</span>)}
+                </div>
+              </div>
+            })}
+          </div>
+
+          <div className="mt-4 rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+            <div className="text-[11px] font-black text-violet-300">AIの読み</div>
+            <div className="mt-1 text-xs leading-relaxed text-slate-200">{flowPrediction.narrative}</div>
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl border border-emerald-800/70 bg-emerald-950/30 p-3"><div className="text-[11px] font-black text-emerald-300">↑ 展開追い風</div><div className="mt-2 space-y-1">{flowPrediction.advantages.map((h:any)=><div key={`adv-${h.id}`} className="flex items-center justify-between text-xs"><span className="font-bold text-slate-100">{h.umaban} {h.name}</span><span className="text-[10px] text-emerald-300">{flowReason(h)}</span></div>)}</div></div>
+            <div className="rounded-xl border border-rose-900/70 bg-rose-950/25 p-3"><div className="text-[11px] font-black text-rose-300">↓ 展開逆風</div><div className="mt-2 space-y-1">{flowPrediction.disadvantages.map((h:any)=><div key={`dis-${h.id}`} className="flex items-center justify-between text-xs"><span className="font-bold text-slate-100">{h.umaban} {h.name}</span><span className="text-[10px] text-rose-300">前半消耗・位置取りを警戒</span></div>)}</div></div>
+          </div>
+
+          <div className="mt-3 rounded-xl border border-cyan-900/70 bg-cyan-950/20 p-3">
+            <div className="text-[11px] font-black text-cyan-300">印 × 展開の乖離チェック</div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">{ranked.filter((h:any)=>h._autoMark).sort((a:any,b:any)=>(MARK_ORDER[a._autoMark]??9)-(MARK_ORDER[b._autoMark]??9)).slice(0,7).map((h:any)=>{
+              const fr=flowPrediction.flowRank.get(h.id)||99; const pr=h._rank||99; const diff=fr-pr;
+              const msg=diff>=3?'能力評価上位だが展開は逆風':diff<=-3?'展開恩恵が大きい': '印と展開が概ね一致';
+              return <div key={`gap-${h.id}`} className="rounded-lg bg-slate-900 px-3 py-2 text-xs"><div className="flex items-center justify-between"><span className="font-black text-white">{h._autoMark} {h.umaban} {h.name}</span><span className={`text-[10px] font-bold ${diff>=3?'text-rose-300':diff<=-3?'text-emerald-300':'text-slate-400'}`}>{msg}</span></div><div className="mt-1 text-[9px] text-slate-500">総合順位 {pr}位 / 展開ゴール前 {fr}位</div></div>
+            })}</div>
+          </div>
+          <div className="mt-2 text-[9px] leading-relaxed text-slate-500">※展開図は位置取りシミュレーションで、印順位そのものではありません。人気・オッズは隊列決定には使用せず、保存時に展開スナップショットを残します。</div>
         </div>
       )}
 
