@@ -41,6 +41,7 @@ const wakuOf = (umaban, totalStarters = 18) => {
 };
 
 const JRA_TRACKS = ["札幌", "函館", "福島", "新潟", "東京", "中山", "中京", "京都", "阪神", "小倉"];
+const LEFT_HANDED_TRACKS = new Set(["東京", "新潟", "中京"]);
 const GOINGS = ["良", "稍重", "重", "不良"];
 const RACE_CLASSES = ["新馬", "未勝利", "1勝", "2勝", "3勝", "OP", "L", "G3", "G2", "G1"];
 const RUNNING_STYLES = ["逃", "先", "差", "追"];
@@ -3300,7 +3301,7 @@ export default function JRAPredictionTool() {
             <div className="rounded-xl border border-violet-700 bg-violet-950/60 px-4 py-2 text-center">
               <div className="text-[10px] font-bold text-violet-300">想定ペース</div>
               <div className="text-2xl font-black text-white">{flowPrediction.pace}</div>
-              <div className="text-[9px] text-slate-400">独自判定 {flowPrediction.autoPace}</div>
+              <div className="text-[9px] text-slate-400">独自判定 {flowPrediction.autoPace} / {LEFT_HANDED_TRACKS.has(track)?"左回り ↶":"右回り ↷"}</div>
             </div>
           </div>
           <div className="mt-3 flex gap-2">
@@ -3311,17 +3312,27 @@ export default function JRAPredictionTool() {
           <div className="mt-4 space-y-3">
             {(flowScenario==='main'?flowPrediction.mainStages:flowPrediction.altStages).map((stage:any,stageIdx:number)=>{
               const total=Math.max(...stage.horses.map((x:any)=>Number(x.umaban)||0),stage.horses.length);
+              const isLeftCourse=LEFT_HANDED_TRACKS.has(track);
+              // JRAの実コース回りに合わせる。左回りは向正面が←、4角出口〜直線が→。右回りは逆。
+              const isTurnStage=stageIdx===2;
+              const isHomeStretch=stageIdx>=2;
+              const forwardSide=(isHomeStretch ? (isLeftCourse?'right':'left') : (isLeftCourse?'left':'right')) as 'left'|'right';
+              const directionText=isTurnStage
+                ? (isLeftCourse?'↶ 4角出口 →':'↷ 4角出口 ←')
+                : (forwardSide==='left'?'←':'→');
               return <div key={stage.label} className="overflow-hidden rounded-xl border border-slate-700 bg-[#08111f]">
                 <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
-                  <div className="font-black text-slate-100">{stage.label} <span className="ml-1 text-[10px] font-normal text-slate-500">進行方向 ←</span></div>
+                  <div className="font-black text-slate-100">{stage.label} <span className="ml-1 text-[10px] font-normal text-slate-500">進行方向 {directionText}</span></div>
                   <div className="text-[10px] text-slate-400">信頼度 <span className="font-black text-cyan-300">{stage.confidence}</span></div>
                 </div>
                 <div className="relative h-[112px] overflow-hidden bg-[linear-gradient(90deg,rgba(15,23,42,.15),rgba(30,41,59,.35)),repeating-linear-gradient(0deg,transparent,transparent_36px,rgba(148,163,184,.08)_37px)]">
-                  <div className="absolute inset-y-0 left-[6%] border-l border-dashed border-cyan-500/30" />
-                  <div className="absolute bottom-1 left-2 text-[9px] text-cyan-500/60">前</div><div className="absolute bottom-1 right-2 text-[9px] text-slate-600">後</div>
+                  <div className={`absolute inset-y-0 ${forwardSide==='left'?'left-[6%]':'right-[6%]'} border-l border-dashed border-cyan-500/30`} />
+                  <div className={`absolute bottom-1 ${forwardSide==='left'?'left-2':'right-2'} text-[9px] text-cyan-500/60`}>前</div>
+                  <div className={`absolute bottom-1 ${forwardSide==='left'?'right-2':'left-2'} text-[9px] text-slate-600`}>後</div>
                   {stage.horses.map((h:any,i:number)=>{
                     const w=wakuOf(h.umaban,total)||4; const wc=WAKU_COLORS[w];
-                    const left=6+(i/Math.max(1,stage.horses.length-1))*86;
+                    const progress=i/Math.max(1,stage.horses.length-1);
+                    const left=forwardSide==='left' ? 6+progress*86 : 94-progress*86;
                     const lane=((Number(h.umaban)||i)%3)*30+9;
                     return <button key={`${stage.label}-${h.id}`} title={`${h.umaban} ${h.name}｜${flowReason(h)}`} className="absolute -translate-x-1/2 rounded-full border-2 shadow-lg transition-transform hover:scale-110" style={{left:`${left}%`,top:`${lane}px`,background:wc.bg,color:wc.text,borderColor:wc.border,width:'28px',height:'28px',fontSize:'11px',fontWeight:900}}>{h.umaban}</button>
                   })}
