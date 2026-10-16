@@ -7,6 +7,10 @@ const STYLE_PACE_SCORE = {
   H: { "逃": -1.8, "先": -0.6, "差": 1.5, "追": 1.0 },
 };
 const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+const importedCommentScore = h => {
+  const a=h.commentAssessment,n=num(a?.score);
+  return a?.method==='keyword-v3.13.1'&&a.forText===h.comment&&n!==null&&n>=25&&n<=95?n:scoreCommentText(h.comment||'');
+};
 const scoreCommentText = (raw = "") => {
   const text = String(raw);
   let score = 55;
@@ -177,7 +181,7 @@ export function computeHorses({horses,weights,agariBonus,surface,distance,oddsOn
 
       // 調教・厩舎コメントを100点化。50〜55点を中立として補正する。
       const training100 = num(h.trainingScore) ?? GRADE_TO_TRAINING_100[h.training] ?? 65;
-      const comment100 = scoreCommentText(h.comment || "");
+      const comment100 = importedCommentScore(h);
       const effectiveTrainingLearn = learningOn ? clamp(Number(learned.training ?? 1), 0.80, 1.05) : 1;
       const effectiveCommentLearn = learningOn ? clamp(Number(learned.comment ?? 1), 0.85, 1.05) : 1;
       const effectiveConditionLearn = learningOn ? clamp(Number(learned.condition ?? 1), 0.75, 1.10) : 1;

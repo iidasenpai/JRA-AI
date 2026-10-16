@@ -13,6 +13,10 @@ const STYLE_PACE_SCORE = {
   M: { "逃": 0.4, "先": 0.7, "差": 0.5, "追": 0.0 },
   H: { "逃": -1.8, "先": -0.6, "差": 1.5, "追": 1.0 },
 };
+const importedCommentScore = h => {
+  const a=h.commentAssessment,n=num(a?.score);
+  return a?.method==='keyword-v3.13.1'&&a.forText===h.comment&&n!==null&&n>=25&&n<=95?n:scoreCommentText(h.comment||'');
+};
 const scoreCommentText = (raw = "") => {
   const text = String(raw);
   let score = 55;
@@ -38,7 +42,7 @@ const scoreCommentText = (raw = "") => {
 
   const factorGetters = (pace: string = "M") => ({
     training: (h:any) => num(h.trainingScore)===null && !GRADE_TO_TRAINING_100[h.training]?null:(num(h.trainingScore) ?? GRADE_TO_TRAINING_100[h.training]) - 65,
-    comment: (h:any) => h.comment?scoreCommentText(h.comment) - 55:null,
+    comment: (h:any) => h.comment?importedCommentScore(h) - 55:null,
     value: (h:any) => { if(!h._oddsOn)return 0;const p=num(h.ninki); const rank=num(h._rank); return p===null||rank===null ? 0 : p-rank; },
     pace: (h:any) => STYLE_PACE_SCORE[pace]?.[h.runningStyle] ?? 0,
     ground: (h:any) => h._imputed?.groundFit || num(h.groundFit)===null ? null : num(h.groundFit) - 50,

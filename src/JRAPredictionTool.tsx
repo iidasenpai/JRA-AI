@@ -559,9 +559,12 @@ export default function JRAPredictionTool() {
   const applySourceBundle = (bundle) => {
     const r=validateSourceBundle(bundle);
     startNewRace(false);
+    const existing=savedRaces.find(x=>x.status==='pending'&&eventKey(x)===eventKey(r));
+    const rosterKey=hs=>(hs||[]).map(h=>`${h.umaban}:${String(h.name||'').replace(/[\s・･]/g,'')}`).sort().join('|');
+    if(existing&&rosterKey(existing.horses)===rosterKey(r.horses))setActiveSavedRaceId(existing.id);
     setRaceDate(r.raceDate);setRaceNumber(r.raceNumber);setScheduledStart(r.scheduledStart);setRaceName(r.raceName);
     setTrack(r.track);setSurface(r.surface);setDistance(r.distance);setGoing(r.going);setRaceClass(r.raceClass);setPaceType(r.paceType);
-    setHorses(r.horses.map(h=>autoCompleteHorseFactors({...cleanHorse(h),id:crypto.randomUUID(),finish:"",mark:"",_sourceBundle:{acquiredAt:bundle.acquiredAt,sourceIds:bundle.sourceIds}},r)));
+    setHorses(r.horses.map(h=>autoCompleteHorseFactors({...cleanHorse(h),id:crypto.randomUUID(),finish:"",mark:h.entryStatus==="取消"?"消":"",_sourceBundle:{acquiredAt:bundle.acquiredAt,sourceIds:bundle.sourceIds}},r)));
     setSourceMessage(`${r.track}${r.raceNumber}R・${r.horses.length}頭を開きました。予想を確認して「レースを保存」を押してください。`);
   };
   const importAutoSource = () => {
@@ -2667,7 +2670,7 @@ export default function JRAPredictionTool() {
       )}
 
       <div className="mx-3 mt-3 rounded-lg border border-slate-600 p-3 text-xs">
-        v3.13.3 ／ 事前固定の検証 {integrityStats.prospective.n}件・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
+        v3.13.4 ／ 事前固定の検証 {integrityStats.prospective.n}件・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
         <label className="mt-2 mb-2 flex gap-2"><input type="checkbox" checked={experimentalOn} onChange={e=>setExperimentalOn(e.target.checked)} />新しい評価方式を検証する（指数不足の補助評価・固定頭数。過去比較で優位性未確認）</label>
         <div className="mt-1">旧記録の予想は保存値を保持します。修正後の再予想を過去の的中実績には加えません。発走日時未入力の新規記録も事前検証とは分けます。</div>
       </div>
@@ -2683,6 +2686,7 @@ export default function JRAPredictionTool() {
             </select>
           </label>
           <button onClick={openSelectedSource} className="rounded bg-emerald-700 px-3 py-2 font-bold">選んだレースを開く</button>
+          {sourceCollection.find(b=>sourceRaceKey(b)===sourceSelection)?.notes?.map((note,i)=><div key={i} className="w-full text-amber-300">{note}</div>)}
           <div className="w-full text-slate-300">取得日時（日本時間）：{new Date(sourceCollection.find(b=>sourceRaceKey(b)===sourceSelection)?.acquiredAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}。オッズ・馬体重・馬場は取得時点の情報です。</div>
         </div>}
         {sourceMessage&&<div role="status" className="mt-3 whitespace-pre-wrap">{sourceMessage}</div>}

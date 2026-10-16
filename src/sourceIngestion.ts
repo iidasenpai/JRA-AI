@@ -2,7 +2,7 @@
 import { strictNumber } from './integrity';
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 const normalize=s=>String(s||'').replace(/\r/g,'').replace(/\u00a0/g,' ');
-const indexValue=s=>{const t=String(s||'').trim();if(/^(?:-|--|未)$/.test(t))return '';const n=strictNumber(t);if(n===null||n<0||n>200)throw Error(`指数列に異常値: ${t}`);return String(n);};
+const indexValue=s=>{const t=String(s||'').trim();if(/^(?:-|--|未)$/.test(t))return '';const n=strictNumber(t);if(n===null||n< -200||n>200)throw Error(`指数列に異常値: ${t}`);return String(n);};
 const nameKey=s=>String(s||'').replace(/[\s・･]/g,'');
 const tracks='札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉';
 const fit=(a,b,c,d)=>{const total=a+b+c+d;return total?String(Math.round(clamp(50+((a+b*.66+c*.4)/total-.25)*42*total/(total+5),35,72))):'50';};
@@ -57,6 +57,7 @@ const scoreTraining=(block) => {
       const grade = numeric >= 88 ? "S" : numeric >= 78 ? "A" : numeric >= 65 ? "B" : numeric >= 50 ? "C" : "D";
       return { grade, numeric };
     };
+const detectClass=s=>/未勝利/.test(s)?'未勝利':/新馬/.test(s)?'新馬':/[1１]勝/.test(s)?'1勝':/[2２]勝/.test(s)?'2勝':/[3３]勝/.test(s)?'3勝':/G(?:III|3)/i.test(s)?'G3':/G(?:II|2)/i.test(s)?'G2':/G(?:I|1)/i.test(s)?'G1':/リステッド|\(L\)| L(?:\s|$)/.test(s)?'L':/オープン/.test(s)?'OP':'';
 export function parseCollectedPages(pages, acquiredAt=new Date().toISOString()){
   const required=['race','details','standard','recent','training','comments'];
   for(const k of required)if(!pages[k]?.text||!pages[k]?.url)throw Error(`未取得: ${k}`);
@@ -84,6 +85,7 @@ export function parseCollectedPages(pages, acquiredAt=new Date().toISOString()){
   if(!new RegExp(`${surface==='芝'?'芝':'ダ(?:ート)?'}${distance}m`).test(raceText))throw Error('両サイトの芝ダ・距離が不一致');
   const standard=normalize(pages.standard.text),rowRe=/(?:^|\n)\s*(\d{1,2})\s*\n\t\t([^\t\n]+)\t([^\n]+)/g;
   const horses=[];
+  const noIndices=/新馬戦にはタイム指数はございません/.test(standard)&&/新馬/.test(no[2]);
   for(const m of standard.matchAll(rowRe)){
     const c=m[3].split('\t').map(x=>x.trim());if(c.length!==15)throw Error(`馬番${m[1]}の標準指数列数が不正: ${c.length}`);
     const h={id:crypto.randomUUID(),umaban:m[1],mark:'',name:m[2],finish:'',bodyChange:'',training:'',trainingScore:'',trainingNote:'',comment:'',runningStyle:'',styleSource:''};
@@ -93,8 +95,17 @@ export function parseCollectedPages(pages, acquiredAt=new Date().toISOString()){
     horses.push(h);
   }
   const expected=Number(raceText.match(/\s(\d{1,2})頭/)?.[1]);
+  if(noIndices){
+    const dt=normalize(pages.details.text),hh=[...dt.matchAll(/(?:^|\n)(\d{1,2})\s*\n(?:取消\n)?([^\n]+)のデータベース\n/g)];
+    for(let i=0;i<hh.length;i++){
+      const m=hh[i],block=dt.slice(m.index,i+1<hh.length?hh[i+1].index:dt.length);
+      const meta=block.match(/\n([牡牝セ]\d+) [^\n]+\n([^\n]+)\n-\n[^\d\n]*([\d.]+)/);
+      if(!meta)throw Error(`新馬${m[1]}の性齢・騎手・斤量が不明`);
+      horses.push({id:crypto.randomUUID(),umaban:m[1],name:m[2],entryStatus:/^\s*\d+\s*\n取消\n/.test(block)?'取消':'',mark:/^\s*\d+\s*\n取消\n/.test(block)?'消':'',finish:'',bodyChange:'',training:'',trainingScore:'',trainingNote:'',comment:'',runningStyle:'',styleSource:'',sex:meta[1],jockey:meta[2],weight:meta[3],odds:'',ninki:'',...Object.fromEntries(['best','start','oikake','agari','avg5','dist','course','r3','r2','r1'].map(k=>[k,'']))});
+    }
+  }
   if(horses.length!==expected||!expected||new Set(horses.map(h=>h.umaban)).size!==expected)throw Error(`標準指数の頭数不足 ${horses.length}/${expected}`);
-  const details=normalize(pages.details.text),heads=[...details.matchAll(/(?:^|\n)(\d{1,2})\s*\n([^\n]+)のデータベース\n/g)];
+  const details=normalize(pages.details.text),heads=[...details.matchAll(/(?:^|\n)(\d{1,2})\s*\n(?:取消\n)?([^\n]+)のデータベース\n/g)];
   if(heads.length!==expected)throw Error(`詳細出馬表の頭数不足 ${heads.length}/${expected}`);
   for(let i=0;i<heads.length;i++){
     const m=heads[i],h=horses.find(h=>h.umaban===m[1]);if(!h||nameKey(h.name)!==nameKey(m[2]))throw Error('詳細の馬番・馬名が不一致');
@@ -109,11 +120,11 @@ export function parseCollectedPages(pages, acquiredAt=new Date().toISOString()){
     if(body){h.bodyWeight=body[1];h.bodyChange=body[2];}
   }
   const recent=normalize(pages.recent.text),recentHeads=[...recent.matchAll(/(?:^|\n)\s*(\d{1,2})\s*\n\t\t([^\t\n]+)\t/g)];
-  if(recentHeads.length!==expected)throw Error('近5走の頭数不足');
+  if(!noIndices&&recentHeads.length!==expected)throw Error('近5走の頭数不足');
   for(let i=0;i<recentHeads.length;i++){
     const m=recentHeads[i],h=horses.find(h=>h.umaban===m[1]);if(!h||nameKey(h.name)!==nameKey(m[2]))throw Error('近5走の馬名不一致');
     const b=recent.slice(m.index,i+1<recentHeads.length?recentHeads[i+1].index:recent.length);
-    const average=b.match(/\t(\d+(?:\.\d+)?\*?)\t(\d+(?:\.\d+)?\*?)\t(\d+(?:\.\d+)?\*?)\t(\d+(?:\.\d+)?\*?)\t([\d.]+)\t(\d{1,2})(?:\n|$)/);
+    const average=b.match(/\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t([\d.]+)\t(\d{1,2})(?:\n|$)/);
     if(!average)throw Error(`馬番${h.umaban}の近5走集計が不明`);
     h.avgStart=indexValue(average[2]);h.avgChase=indexValue(average[3]);h.avgAgari=indexValue(average[4]);
     h.sourceRecentAverage=indexValue(average[1]);
@@ -126,16 +137,16 @@ export function parseCollectedPages(pages, acquiredAt=new Date().toISOString()){
     const block={summary:m[3],arrow:m[4],lines:b.split('\n').map(x=>x.replace(/\s+/g,' ').trim()).filter(Boolean)};
     const score=scoreTraining(block);h.training=score.grade;h.trainingScore=String(score.numeric);h.trainingNote=`${m[3]} ${m[4]}`;h.trainingRaw=b.trim();
   }
-  const comments=normalize(pages.comments.text),commentLines=comments.split('\n').map(x=>x.trim()).filter(x=>/^[◎○▲△×]?[^【\n]+【[^】]+】/.test(x));
+  const comments=normalize(pages.comments.text).replace(/^([◎○▲△×]?)([^（(\n]+)[（(]([^）)]+)[）)]\s+([^―\n]+)――(.*)$/gm,'$1$2【$4】$3。$5'),commentLines=comments.split('\n').map(x=>x.trim()).filter(x=>/^[◎○▲△×]?[^【\n]+【[^】]+】/.test(x));
   if(commentLines.length!==expected)throw Error(`厩舎コメントの頭数不足 ${commentLines.length}/${expected}（ログイン切れの可能性）`);
   const used=new Set();
   for(const line of commentLines){const name=line.match(/^[◎○▲△×]?([^【]+)【/)?.[1],h=horses.find(h=>nameKey(h.name)===nameKey(name));if(!h||used.has(h.umaban))throw Error('コメントの馬名不一致・重複');h.comment=line;used.add(h.umaban);}
   const commentDate=comments.match(/(20\d{2})年(\d{1,2})月(\d{1,2})日\s+\d+回([^\s\d]+)\d+日目/);
   if(!commentDate||commentDate.slice(1).join('|')!==date.slice(1).join('|'))throw Error('調教とコメントの開催日・場が不一致');
-  const pace=raceText.match(/コース情報[^\n]*\nペース\n([SMH])/);if(!pace)throw Error('AI展開予測のペースを取得できません');
-  const race={raceDate,raceNumber:no[1],raceName:no[2].normalize('NFKC'),track,surface,distance,going:book.match(/m\s*\([^\n]+\)[^\n]*?[・ ](良|稍重|重|不良)(?:\s|$)/)?.[1]||'良',raceClass:/未勝利/.test(no[2])?'未勝利':/新馬/.test(no[2])?'新馬':'',scheduledStart:`${raceDate}T${time[1].padStart(2,'0')}:${time[2]}:00+09:00`,paceType:pace[1],horses};
+  const pace=raceText.match(/コース情報[^\n]*\nペース\n([SMH])/);if(!pace&&!noIndices)throw Error('AI展開予測のペースを取得できません');
+  const race={raceDate,raceNumber:no[1],raceName:no[2].normalize('NFKC'),track,surface,distance,going:book.match(/m\s*\([^\n]+\)[^\n]*?[・ ](良|稍重|重|不良)(?:\s|$)/)?.[1]||'良',raceClass:detectClass(book.slice(book.indexOf(date[0]),book.indexOf('発走時刻')).normalize('NFKC')),scheduledStart:`${raceDate}T${time[1].padStart(2,'0')}:${time[2]}:00+09:00`,paceType:pace?.[1]||'',horses};
   if(!race.raceClass)throw Error('この試作で未対応のクラスです');
-  return {type:'jra-ai-source-bundle',version:1,acquiredAt,complete:true,race,sourceIds:{netkeiba:raceId,keibabook:bookId},sources:Object.fromEntries(required.map(k=>[k,{url:pages[k].url,acquiredAt:pages[k].acquiredAt||acquiredAt,count:expected}])),missing:[],notes:['馬体重は未発表なら空欄。近走の馬体重で代用しない。','自動取得試験の入力データ。固定予想・結果済み実績ではない。']};
+  return {type:'jra-ai-source-bundle',version:1,acquiredAt,complete:true,race,sourceIds:{netkeiba:raceId,keibabook:bookId},sources:Object.fromEntries(required.map(k=>[k,{url:pages[k].url,acquiredAt:pages[k].acquiredAt||acquiredAt,count:expected}])),missing:[],notes:[...(noIndices?['新馬戦：タイム指数は提供されていません。AI展開のペースが未提供の場合も空欄です。']:[]),'馬体重は未発表なら空欄。近走の馬体重で代用しません。','取得時点の入力資料です。予想の保存は別途必要です。']};
 }
 export function validateSourceBundle(bundle){
   if(bundle?.type!=='jra-ai-source-bundle'||bundle.version!==1||bundle.complete!==true||!Array.isArray(bundle.missing)||bundle.missing.length)throw Error('未完成または未対応の取得データです');
