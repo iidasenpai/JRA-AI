@@ -1,6 +1,6 @@
 // @ts-nocheck
 // Pure migration, immutable forecast and replay logic. No UI or storage side effects.
-export const MODEL_VERSION = '3.13.0';
+export const MODEL_VERSION = '3.13.1';
 export const strictNumber = value => {
   if (value === null || value === undefined) return null;
   const s=String(value).normalize('NFKC').replace(/[−―]/g,'-').replace(/\*$/,'').trim();

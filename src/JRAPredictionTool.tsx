@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { validateSourceBundle } from "./sourceIngestion";
 import { learnFromRace } from "./learning";
 import { computeHorses,rankHorses } from "./prediction";
 import { MODEL_VERSION, strictNumber, parseBodyDelta, cleanHorse, migrateRaces, predictionHorses, predictionOrder, actualHorses, resultNumbers, reviewOf, eligibleRace, replayLearning, freezePrediction, eventKey, evaluateRecords, midPercentile, confidenceAssessment } from "./integrity";
@@ -152,7 +153,7 @@ const autoCompleteHorseFactors = (horse, race = {}) => {
   };
 
   // 厩舎コメントから明確に読み取れる適性・状態は中立値より優先。
-  if (num(h.condition) === null && comment) h.condition = String(scoreCommentText(comment));
+  if (num(h.condition) === null && comment) { h.condition = String(scoreCommentText(comment)); h._imputed={...(h._imputed||{}),condition:true}; }
   if (num(h.groundFit) === null && /(?:芝|洋芝|良馬場|稍重|重馬場|不良|ダート).*(?:合う|対応|問題ない|適性|向く)/.test(comment)) {
     h.groundFit = "56";
   }
@@ -167,7 +168,7 @@ const autoCompleteHorseFactors = (horse, race = {}) => {
   setIfBlank("gateFit", 50);
   setIfBlank("pedigreeFit", 50);
   setIfBlank("condition", 50);
-  setIfBlank("bodyChange", 0);
+  // 未発表の馬体重増減は空欄を保持し、増減ゼロの実測値と区別する。
 
   // 斤量から極端な異常値を防ぐ（実測値そのものは変更しない）。
   if (h.weight !== "" && h.weight !== null && h.weight !== undefined) {
@@ -543,6 +544,18 @@ export default function JRAPredictionTool() {
   };
 
   // ---- 行操作 ----
+  const importAutoSource = () => {
+    const input=document.createElement("input");input.type="file";input.accept="application/json,.json";
+    input.onchange=async()=>{try{
+      const file=input.files?.[0];if(!file)return;const bundle=JSON.parse(await file.text());const r=validateSourceBundle(bundle);
+      startNewRace(false);
+      setRaceDate(r.raceDate);setRaceNumber(r.raceNumber);setScheduledStart(r.scheduledStart);setRaceName(r.raceName);
+      setTrack(r.track);setSurface(r.surface);setDistance(r.distance);setGoing(r.going);setRaceClass(r.raceClass);setPaceType(r.paceType);
+      setHorses(r.horses.map(h=>autoCompleteHorseFactors({...cleanHorse(h),id:crypto.randomUUID(),finish:"",mark:"",_sourceBundle:{acquiredAt:bundle.acquiredAt,sourceIds:bundle.sourceIds}},r)));
+      flash(`${r.track}${r.raceNumber}R・${r.horses.length}頭を取得データから読み込みました。予想を確認して保存してください`);
+    }catch(e){flash(e instanceof Error?e.message:"取得データを読み込めませんでした");}};input.click();
+  };
+
   const addHorse = () => setHorses((h) => [...h, { ...emptyHorse(), umaban: h.length + 1 }]);
   const removeHorse = (id) => setHorses((h) => h.filter((x) => x.id !== id));
   const updateHorse = (id, field, value) =>
@@ -2609,6 +2622,7 @@ export default function JRAPredictionTool() {
       </div>
       {activeSavedRaceId && (()=>{const r=savedRaces.find(x=>x.id===activeSavedRaceId);return r?<div className="mx-3 mt-3 rounded-lg border border-indigo-500 p-3 text-xs"><div className="font-bold">保存した予想（回顧・成績の基準）</div><div className="mt-1">{predictionOrder(r).filter(h=>h.mark).map(h=>`${h.mark}${h.umaban} ${h.name}`).join(" ／ ")}</div><div className="mt-1">以下の全頭評価は現行方式による参考再評価です。結果登録で保存予想を上書きしません。</div><button onClick={correctRaceIdentity} className="mt-2 rounded bg-indigo-700 p-2">入力中の開催日・Rで開催情報を訂正</button></div>:null;})()}
       {horses.some(h=>Object.keys(h._rawRepairs||{}).some(k=>!k.startsWith('_'))) && <div className="mx-3 mt-3 text-xs text-amber-500">数値欄に文字混入があった馬があります。該当値は評価から外しました。出馬表・指数表を確認して再入力してください。</div>}
+      <div className="mx-3 mt-3 rounded-lg border border-emerald-700 p-3 text-xs"><button onClick={importAutoSource} className="rounded bg-emerald-700 px-3 py-2 font-bold">取得データを読み込む</button><div className="mt-2">6ページの同一レース・全頭照合済みJSONを読み込みます。定期取得サーバーへの接続は未設定です。</div></div>
       {/* レース情報 */}
       <div id="race-info" className="bg-white mx-3 mt-3 scroll-mt-24 rounded-xl shadow-sm border border-gray-200 p-3">
         <div className="mb-2 flex items-center justify-between"><div className="text-sm font-black text-gray-800">① レース情報</div><button onClick={()=>scrollToSection("bulk-input")} className="rounded-lg bg-emerald-50 px-2.5 py-1 text-[10px] font-black text-emerald-700">入力へ ↓</button></div>
