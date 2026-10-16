@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { validateSourceBundle } from "./sourceIngestion";
+import { validateSourceBundle, validateSourceCollection, sourceRaceKey } from "./sourceIngestion";
 import { learnFromRace } from "./learning";
 import { computeHorses,rankHorses } from "./prediction";
 import { MODEL_VERSION, strictNumber, parseBodyDelta, cleanHorse, migrateRaces, predictionHorses, predictionOrder, actualHorses, resultNumbers, reviewOf, eligibleRace, replayLearning, freezePrediction, eventKey, evaluateRecords, midPercentile, confidenceAssessment } from "./integrity";
@@ -305,6 +305,14 @@ export default function JRAPredictionTool() {
   const [learningHistory, setLearningHistory] = useState<any[]>([]);
   const [flowScenario, setFlowScenario] = useState<"main"|"alt">("main");
 
+  const [sourceCollection,setSourceCollection]=useState<any[]>([]);
+  const [sourceSelection,setSourceSelection]=useState("");
+  const [sourceMessage,setSourceMessage]=useState("");
+  useEffect(()=>{(async()=>{
+    try {const stored=await window.storage.get("jra-source-collection");if(stored?.value){const rows=validateSourceCollection(JSON.parse(stored.value));setSourceCollection(rows);setSourceSelection(sourceRaceKey(rows[0]));}}
+    catch {setSourceMessage("取得データ一覧を復元できませんでした。元ファイルを読み込み直してください。");}
+  })();},[]);
+
   // ---- 永続化 ----
   useEffect(() => {
     (async () => {
@@ -544,16 +552,30 @@ export default function JRAPredictionTool() {
   };
 
   // ---- 行操作 ----
+  const applySourceBundle = (bundle) => {
+    const r=validateSourceBundle(bundle);
+    startNewRace(false);
+    setRaceDate(r.raceDate);setRaceNumber(r.raceNumber);setScheduledStart(r.scheduledStart);setRaceName(r.raceName);
+    setTrack(r.track);setSurface(r.surface);setDistance(r.distance);setGoing(r.going);setRaceClass(r.raceClass);setPaceType(r.paceType);
+    setHorses(r.horses.map(h=>autoCompleteHorseFactors({...cleanHorse(h),id:crypto.randomUUID(),finish:"",mark:"",_sourceBundle:{acquiredAt:bundle.acquiredAt,sourceIds:bundle.sourceIds}},r)));
+    setSourceMessage(`${r.track}${r.raceNumber}R・${r.horses.length}頭を開きました。予想を確認して「レースを保存」を押してください。`);
+  };
   const importAutoSource = () => {
     const input=document.createElement("input");input.type="file";input.accept="application/json,.json";
     input.onchange=async()=>{try{
-      const file=input.files?.[0];if(!file)return;const bundle=JSON.parse(await file.text());const r=validateSourceBundle(bundle);
-      startNewRace(false);
-      setRaceDate(r.raceDate);setRaceNumber(r.raceNumber);setScheduledStart(r.scheduledStart);setRaceName(r.raceName);
-      setTrack(r.track);setSurface(r.surface);setDistance(r.distance);setGoing(r.going);setRaceClass(r.raceClass);setPaceType(r.paceType);
-      setHorses(r.horses.map(h=>autoCompleteHorseFactors({...cleanHorse(h),id:crypto.randomUUID(),finish:"",mark:"",_sourceBundle:{acquiredAt:bundle.acquiredAt,sourceIds:bundle.sourceIds}},r)));
-      flash(`${r.track}${r.raceNumber}R・${r.horses.length}頭を取得データから読み込みました。予想を確認して保存してください`);
-    }catch(e){flash(e instanceof Error?e.message:"取得データを読み込めませんでした");}};input.click();
+      const file=input.files?.[0];if(!file)return;
+      const rows=validateSourceCollection(JSON.parse(await file.text()));
+      await window.storage.set("jra-source-collection",JSON.stringify({type:"jra-ai-source-collection",version:1,bundles:rows}));
+      setSourceCollection(rows);setSourceSelection(sourceRaceKey(rows[0]));
+      if(rows.length===1)applySourceBundle(rows[0]);
+      else setSourceMessage(`${rows.length}レースを読み込みました。下の一覧からレースを選んで開いてください。`);
+    }catch(e){setSourceMessage(e instanceof Error?e.message:"取得データを読み込めませんでした");}};input.click();
+  };
+  const openSelectedSource = () => {
+    const bundle=sourceCollection.find(b=>sourceRaceKey(b)===sourceSelection);
+    if(!bundle)return;
+    if(horses.length&&!window.confirm("入力中の内容を選択したレースに切り替えます。未保存の編集は失われます。続けますか？"))return;
+    applySourceBundle(bundle);
   };
 
   const addHorse = () => setHorses((h) => [...h, { ...emptyHorse(), umaban: h.length + 1 }]);
@@ -2622,7 +2644,20 @@ export default function JRAPredictionTool() {
       </div>
       {activeSavedRaceId && (()=>{const r=savedRaces.find(x=>x.id===activeSavedRaceId);return r?<div className="mx-3 mt-3 rounded-lg border border-indigo-500 p-3 text-xs"><div className="font-bold">保存した予想（回顧・成績の基準）</div><div className="mt-1">{predictionOrder(r).filter(h=>h.mark).map(h=>`${h.mark}${h.umaban} ${h.name}`).join(" ／ ")}</div><div className="mt-1">以下の全頭評価は現行方式による参考再評価です。結果登録で保存予想を上書きしません。</div><button onClick={correctRaceIdentity} className="mt-2 rounded bg-indigo-700 p-2">入力中の開催日・Rで開催情報を訂正</button></div>:null;})()}
       {horses.some(h=>Object.keys(h._rawRepairs||{}).some(k=>!k.startsWith('_'))) && <div className="mx-3 mt-3 text-xs text-amber-500">数値欄に文字混入があった馬があります。該当値は評価から外しました。出馬表・指数表を確認して再入力してください。</div>}
-      <div className="mx-3 mt-3 rounded-lg border border-emerald-700 p-3 text-xs"><button onClick={importAutoSource} className="rounded bg-emerald-700 px-3 py-2 font-bold">取得データを読み込む</button><div className="mt-2">6ページの同一レース・全頭照合済みJSONを読み込みます。定期取得サーバーへの接続は未設定です。</div></div>
+      <div className="mx-3 mt-3 rounded-lg border border-emerald-700 p-3 text-xs">
+        <button onClick={importAutoSource} className="rounded bg-emerald-700 px-3 py-2 font-bold">取得データを読み込む</button>
+        <div className="mt-2">まとめて取得したJSONを1回読み込み、レースを選んで使えます。過去の予想・結果は保持します。</div>
+        {sourceCollection.length>0&&<div className="mt-3 flex flex-wrap gap-2">
+          <label className="w-full">取得済み {sourceCollection.length}レース
+            <select aria-label="取得済みレース" value={sourceSelection} onChange={e=>setSourceSelection(e.target.value)} className="mt-1 block w-full rounded border border-slate-600 bg-slate-950 p-3 text-base">
+              {sourceCollection.map(b=><option key={sourceRaceKey(b)} value={sourceRaceKey(b)}>{b.race.raceDate} {b.race.track}{b.race.raceNumber}R {b.race.raceName}（{b.race.horses.length}頭）</option>)}
+            </select>
+          </label>
+          <button onClick={openSelectedSource} className="rounded bg-emerald-700 px-3 py-2 font-bold">選んだレースを開く</button>
+          <div className="w-full text-slate-300">取得日時（日本時間）：{new Date(sourceCollection.find(b=>sourceRaceKey(b)===sourceSelection)?.acquiredAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}。オッズ・馬体重・馬場は取得時点の情報です。</div>
+        </div>}
+        {sourceMessage&&<div role="status" className="mt-3 whitespace-pre-wrap">{sourceMessage}</div>}
+      </div>
       {/* レース情報 */}
       <div id="race-info" className="bg-white mx-3 mt-3 scroll-mt-24 rounded-xl shadow-sm border border-gray-200 p-3">
         <div className="mb-2 flex items-center justify-between"><div className="text-sm font-black text-gray-800">① レース情報</div><button onClick={()=>scrollToSection("bulk-input")} className="rounded-lg bg-emerald-50 px-2.5 py-1 text-[10px] font-black text-emerald-700">入力へ ↓</button></div>

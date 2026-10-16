@@ -150,3 +150,22 @@ export function validateSourceBundle(bundle){
   }
   return r;
 }
+
+
+// 一括ファイルも全件検証してから受け入れる。重複は上書きせず拒否する。
+export const sourceRaceKey = bundle => {
+  const r=bundle.race;
+  return `${r.raceDate}|${r.track}|${r.raceNumber}`;
+};
+export function validateSourceCollection(data){
+  const bundles=data?.type==='jra-ai-source-bundle'?[data]:data?.type==='jra-ai-source-collection'&&data.version===1?data.bundles:null;
+  if(!Array.isArray(bundles)||!bundles.length||bundles.length>72)throw Error('1〜72レースの取得データを指定してください');
+  const seen=new Set();
+  bundles.forEach((b,i)=>{
+    try {validateSourceBundle(b);} catch(e){throw Error(`${i+1}レース目: ${e.message}`);}
+    const key=sourceRaceKey(b);
+    if(seen.has(key))throw Error('同じ開催日・競馬場・レース番号が重複しています');
+    seen.add(key);
+  });
+  return [...bundles].sort((a,b)=>a.race.raceDate.localeCompare(b.race.raceDate)||a.race.track.localeCompare(b.race.track,'ja')||Number(a.race.raceNumber)-Number(b.race.raceNumber));
+}
