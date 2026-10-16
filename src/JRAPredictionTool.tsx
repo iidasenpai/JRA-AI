@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { validateSourceBundle, validateSourceCollection, sourceRaceKey } from "./sourceIngestion";
+import { validateResultCollection, planResultImport } from "./resultIngestion";
 import { learnFromRace } from "./learning";
 import { computeHorses,rankHorses } from "./prediction";
 import { MODEL_VERSION, strictNumber, parseBodyDelta, cleanHorse, migrateRaces, predictionHorses, predictionOrder, actualHorses, resultNumbers, reviewOf, eligibleRace, replayLearning, freezePrediction, eventKey, evaluateRecords, midPercentile, confidenceAssessment } from "./integrity";
@@ -305,6 +306,9 @@ export default function JRAPredictionTool() {
   const [learningHistory, setLearningHistory] = useState<any[]>([]);
   const [flowScenario, setFlowScenario] = useState<"main"|"alt">("main");
 
+  const [resultImportData,setResultImportData]=useState<any>(null);
+  const [resultImportMessage,setResultImportMessage]=useState("");
+  const resultImportPlan=useMemo(()=>resultImportData?planResultImport(savedRaces,resultImportData):null,[savedRaces,resultImportData]);
   const [sourceCollection,setSourceCollection]=useState<any[]>([]);
   const [sourceSelection,setSourceSelection]=useState("");
   const [sourceMessage,setSourceMessage]=useState("");
@@ -2574,12 +2578,37 @@ export default function JRAPredictionTool() {
     const raw=String(resultOrderInput).normalize('NFKC').trim();
     const candidate={...active,resultOrder:raw};const order=resultNumbers(candidate);
     if(order.length!==3){flash("対象レースの異なる馬番3頭を入力してください（例 3-11-5）");return;}
-    const updated={...active,learningEnabledAtResult:learningOn,status:'completed',completedAt:new Date().toISOString(),resultOrder:order.join('-'),
-      horses:active.horses.map(h=>({...h,finish:order.includes(String(h.umaban))?String(order.indexOf(String(h.umaban))+1):''}))};
+    const keepImported=active.resultImport&&resultNumbers(active).join('-')===order.join('-');
+    const updated={...active,learningEnabledAtResult:learningOn,status:'completed',completedAt:active.completedAt||new Date().toISOString(),resultOrder:order.join('-'),
+      resultImport:keepImported?active.resultImport:null,resultPayouts:keepImported?active.resultPayouts:[],
+      resultImportHistory:!keepImported&&active.resultImport?[...(active.resultImportHistory||[]),{...active.resultImport,payouts:active.resultPayouts,correctedAt:new Date().toISOString()}]:active.resultImportHistory,
+      horses:keepImported?active.horses:active.horses.map(h=>({...h,finish:order.includes(String(h.umaban))?String(order.indexOf(String(h.umaban))+1):''}))};
     const records=[updated,...savedRaces.filter(r=>r.id!==active.id)];
     installReplay(records);
     startNewRace(false);setSavedRacesOpen(true);
     flash("固定予想を保持して結果を保存しました。矛盾・重複候補は学習と成績から除外します");
+  };
+  const importResultFile = () => {
+    const input=document.createElement("input");input.type="file";input.accept="application/json,.json";
+    input.onchange=async()=>{try{
+      const file=input.files?.[0];if(!file)return;
+      const data=validateResultCollection(JSON.parse(await file.text()));
+      planResultImport(savedRaces,data);
+      setResultImportData(data);setResultImportMessage("照合結果を確認して「結果を反映する」を押してください。");
+    }catch(e){setResultImportData(null);setResultImportMessage(e instanceof Error?e.message:"結果ファイルを読み込めませんでした");}};
+    input.click();
+  };
+  const applyResultFile = async () => {
+    if(!resultImportData)return;
+    try {
+      const plan=planResultImport(savedRaces,resultImportData);
+      if(!plan.updated){setResultImportMessage("新しく反映できる結果はありません。");return;}
+      const replay=replayLearning(plan.records,DEFAULT_LEARNED,learnFromRace);
+      await window.storage.set("jra-saved-races",JSON.stringify(replay.races));
+      setLearned(replay.next);setHistoryCount(replay.count);setLearningHistory(replay.history);setSavedRaces(replay.races);
+      setResultImportMessage(`${plan.updated}レースの結果を保存し、回顧・学習を更新しました。${plan.report.filter(r=>r.status==='skip').length}レースは確認が必要です。`);
+      setSavedRacesOpen(true);
+    } catch(e){setResultImportMessage(e instanceof Error?e.message:"保存できませんでした。再度お試しください。");}
   };
   const relearnAllCompleted = () => {
     const replay=installReplay(savedRaces);
@@ -2638,7 +2667,7 @@ export default function JRAPredictionTool() {
       )}
 
       <div className="mx-3 mt-3 rounded-lg border border-slate-600 p-3 text-xs">
-        v{MODEL_VERSION} ／ 事前固定の検証 {integrityStats.prospective.n}件・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
+        v3.13.3 ／ 事前固定の検証 {integrityStats.prospective.n}件・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
         <label className="mt-2 mb-2 flex gap-2"><input type="checkbox" checked={experimentalOn} onChange={e=>setExperimentalOn(e.target.checked)} />新しい評価方式を検証する（指数不足の補助評価・固定頭数。過去比較で優位性未確認）</label>
         <div className="mt-1">旧記録の予想は保存値を保持します。修正後の再予想を過去の的中実績には加えません。発走日時未入力の新規記録も事前検証とは分けます。</div>
       </div>
@@ -2657,6 +2686,16 @@ export default function JRAPredictionTool() {
           <div className="w-full text-slate-300">取得日時（日本時間）：{new Date(sourceCollection.find(b=>sourceRaceKey(b)===sourceSelection)?.acquiredAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}。オッズ・馬体重・馬場は取得時点の情報です。</div>
         </div>}
         {sourceMessage&&<div role="status" className="mt-3 whitespace-pre-wrap">{sourceMessage}</div>}
+      </div>
+      <div className="mx-3 mt-3 rounded-lg border border-purple-600 p-3 text-xs">
+        <button onClick={importResultFile} className="rounded bg-purple-700 px-3 py-2 font-bold">結果ファイルを読み込む</button>
+        <div className="mt-2">開催日・競馬場・Rと全頭の馬番・馬名を照合します。保存した予想を保持して着順・払戻を反映し、回顧と学習を更新します。</div>
+        {resultImportPlan&&<div className="mt-3">
+          <div className="font-bold">反映可能 {resultImportPlan.updated}件 ／ 反映済み {resultImportPlan.report.filter(r=>r.status==='same').length}件 ／ 要確認 {resultImportPlan.report.filter(r=>r.status==='skip').length}件</div>
+          <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto">{resultImportPlan.report.map((r,i)=><li key={i} className={r.status==='skip'?'text-amber-400':''}>{r.label}：{r.reason}</li>)}</ul>
+          <button disabled={!resultImportPlan.updated} onClick={applyResultFile} className="mt-3 rounded bg-purple-700 px-3 py-2 font-bold disabled:opacity-40">結果を反映する</button>
+        </div>}
+        {resultImportMessage&&<div role="status" className="mt-3 whitespace-pre-wrap">{resultImportMessage}</div>}
       </div>
       {/* レース情報 */}
       <div id="race-info" className="bg-white mx-3 mt-3 scroll-mt-24 rounded-xl shadow-sm border border-gray-200 p-3">
@@ -3225,6 +3264,11 @@ export default function JRAPredictionTool() {
                     </div>
                     <span className={`shrink-0 rounded px-2 py-1 text-[10px] font-bold ${race.status === "completed" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{race.status === "completed" ? "結果入力済み" : "結果待ち"}</span>
                   </div>
+                  {race.resultImport&&<details className="mt-2 text-xs text-slate-700"><summary>取得した結果・払戻 {race.resultOrder}（100円あたり）</summary>
+                    <div className="mt-1">{race.horses.map(h=>`${h.umaban} ${h.name}：${h.finish}${/^\d+$/.test(h.finish)?'着':''}`).join(' ／ ')}</div>
+                    {race.resultPayouts?.length?race.resultPayouts.map((p,i)=><div key={i}>{p.type} {p.combination.join('-')}：{p.amount.toLocaleString('ja-JP')}円</div>):<div>払戻未取得</div>}
+                    <div>購入額の記録がないため回収率は計算しません。</div>
+                  </details>}
                   {race.integrity?.quarantined && <div className="mt-2 text-xs text-red-500">要確認・学習と成績から除外：{race.integrity.issues.join("／")}</div>}
                   <div className="mt-1 text-xs text-slate-500">{race.predictionSnapshot?.provenance==='prospective'?'発走前の固定予想':'事前予想の検証対象外'}・◎ {predictionOrder(race)[0]?.umaban||'-'}</div>
                   <div className="mt-2 flex flex-wrap gap-2">
