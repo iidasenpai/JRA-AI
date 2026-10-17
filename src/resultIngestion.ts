@@ -20,7 +20,8 @@ export function validateResultCollection(data, now=Date.now()){
     if(!['芝','ダート'].includes(r.surface)||!/^\d{3,4}$/.test(String(r.distance)))fail('芝ダ・距離が不正です');
     const key=eventKey(r);if(keys.has(key))fail('同じレースが重複しています');keys.add(key);
     const url=new URL(r.sourceUrl);
-    if(url.protocol!=='https:'||url.hostname!=='race.sp.netkeiba.com'||url.pathname!=='/race/result.html'||!/^\d{12}$/.test(r.netkeibaRaceId)||url.searchParams.get('race_id')!==r.netkeibaRaceId||Number(r.netkeibaRaceId.slice(-2))!==Number(r.raceNumber)||r.netkeibaRaceId.slice(0,4)!==r.raceDate.slice(0,4)||tracks[Number(r.netkeibaRaceId.slice(4,6))-1]!==r.track)fail('結果ページのレースIDが一致しません');
+    const resultPage=url.pathname==='/race/result.html'||(url.pathname==='/'&&url.searchParams.getAll('pid').length===1&&url.searchParams.get('pid')==='race_result');
+    if(url.protocol!=='https:'||url.hostname!=='race.sp.netkeiba.com'||url.port||url.username||url.password||!resultPage||url.searchParams.getAll('race_id').length!==1||!/^\d{12}$/.test(r.netkeibaRaceId)||url.searchParams.get('race_id')!==r.netkeibaRaceId||Number(r.netkeibaRaceId.slice(-2))!==Number(r.raceNumber)||r.netkeibaRaceId.slice(0,4)!==r.raceDate.slice(0,4)||tracks[Number(r.netkeibaRaceId.slice(4,6))-1]!==r.track)fail('結果ページのレースIDが一致しません');
     if(!Array.isArray(r.horses)||r.horses.length<3||r.horses.length>18)fail('全頭の結果が必要です');
     const seen=new Set(),names=new Set(),ranks=new Set();
     for(const h of r.horses){
