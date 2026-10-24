@@ -1,6 +1,7 @@
 // @ts-nocheck
 import {validateSourceCollection} from './sourceIngestion';
 import {computeHorses,rankHorses} from './prediction';
+import {evaluationCoverage} from './raceContext';
 import {MODEL_VERSION,cleanHorse,strictNumber,freezePrediction,eventKey,migrateRaces,confidenceAssessment} from './integrity';
 const clone=x=>JSON.parse(JSON.stringify(x));
 const qualityOf=horses=>{
@@ -8,7 +9,9 @@ const qualityOf=horses=>{
  const training=horses.filter(h=>h.trainingNote||strictNumber(h.trainingScore)!==null).length,comments=horses.filter(h=>String(h.comment||'').trim().length>=8).length,unknown=horses.filter(h=>h._evaluationStatus!=='指数評価').length;
  const score=Math.round(core/total*60+training/total*20+comments/total*20),issues=[];
  if(core<total)issues.push(`主要指数不足 ${total-core}頭`);if(training<total)issues.push(`調教不足 ${total-training}頭`);if(comments<total)issues.push(`コメント不足 ${total-comments}頭`);if(unknown)issues.push(`補助評価・材料不足 ${unknown}頭`);
- return {score,label:score>=85?'良好':score>=65?'概ね良好':score>=45?'注意':'不足',issues,core,training,comments};
+ const coverage=evaluationCoverage(horses);
+ return {score,label:score>=85?'良好':score>=65?'概ね良好':score>=45?'注意':'不足',issues,core,training,comments,
+  evaluationScope:{total:coverage.total,compared:coverage.compared,indexed:coverage.indexed,auxiliary:coverage.auxiliary,held:coverage.held.length}};
 };
 export function planSourceBatchSave(records,data,settings,{now=Date.now(),prepareHorse=cleanHorse,makeId=()=>crypto.randomUUID()}={}){
  if(!Number.isFinite(now))throw Error('保存日時が不正です');
@@ -41,3 +44,4 @@ export async function persistSourceBatchSave(records,data,settings,{write,...opt
  if(plan.added)await write('jra-saved-races',JSON.stringify(plan.records));
  return plan;
 }
+

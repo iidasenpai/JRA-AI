@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { strictNumber } from './integrity';
+import { parseSurfaceHistory, surfaceContextFromHistory } from './raceContext';
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 const normalize=s=>String(s||'').replace(/\r/g,'').replace(/\u00a0/g,' ');
 const indexValue=s=>{const t=String(s||'').trim();if(/^(?:-|--|未)$/.test(t))return '';const n=strictNumber(t);if(n===null||n< -200||n>200)throw Error(`指数列に異常値: ${t}`);return String(n);};
@@ -87,7 +88,7 @@ export function parseCollectedPages(pages, acquiredAt=new Date().toISOString()){
   const horses=[];
   const noIndices=/新馬戦にはタイム指数はございません/.test(standard)&&/新馬/.test(no[2]);
   for(const m of standard.matchAll(rowRe)){
-    const c=m[3].split('\t').map(x=>x.trim());if(c.length!==15)throw Error(`馬番${m[1]}の標準指数列数が不正: ${c.length}`);
+    const c=m[3].split('\t').map(x=>x.trim());if(c.length===13)c.push('','');if(c.length!==15)throw Error(`馬番${m[1]}の標準指数列数が不正: ${c.length}`);
     const h={id:crypto.randomUUID(),umaban:m[1],mark:'',name:m[2],finish:'',bodyChange:'',training:'',trainingScore:'',trainingNote:'',comment:'',runningStyle:'',styleSource:''};
     for(const [i,k]of ['best','start','oikake','agari','avg5','dist','course','r3','r2','r1'].entries())h[k]=indexValue(c[i]);
     [h.sex,h.weight,h.jockey,h.odds,h.ninki]=c.slice(10);
@@ -112,6 +113,7 @@ export function parseCollectedPages(pages, acquiredAt=new Date().toISOString()){
     const b=details.slice(m.index,i+1<heads.length?heads[i+1].index:details.length);
     const style=b.match(/\n(逃|先|差|追)\n中(\d+)週/);if(style){h.runningStyle=style[1];h.restWeeks=style[2];h.styleSource='詳細出馬表';}
     h.detailImported=true;
+    Object.assign(h,parseSurfaceHistory(b,surface));
     for(const [key,prefix]of [['detailDistanceFit',`全場${surface==='芝'?'芝':'ダ'}${distance}m`],['detailCourseFit',`${track}${surface==='芝'?'芝':'ダ'}${distance}m`]]){
       const z=b.match(new RegExp(`(?:^|\\n)${prefix}\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)`));if(z)h[key]=fit(+z[1],+z[2],+z[3],+z[4]);
     }
@@ -124,7 +126,8 @@ export function parseCollectedPages(pages, acquiredAt=new Date().toISOString()){
   for(let i=0;i<recentHeads.length;i++){
     const m=recentHeads[i],h=horses.find(h=>h.umaban===m[1]);if(!h||nameKey(h.name)!==nameKey(m[2]))throw Error('近5走の馬名不一致');
     const b=recent.slice(m.index,i+1<recentHeads.length?recentHeads[i+1].index:recent.length);
-    const average=b.match(/\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t([\d.]+)\t(\d{1,2})(?:\n|$)/);
+    const average=b.match(/\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t([\d.]+)\t(\d{1,2})(?:\n|$)/)
+      || b.match(/\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)(?:\n|$)/);
     if(!average)throw Error(`馬番${h.umaban}の近5走集計が不明`);
     h.avgStart=indexValue(average[2]);h.avgChase=indexValue(average[3]);h.avgAgari=indexValue(average[4]);
     h.sourceRecentAverage=indexValue(average[1]);
@@ -158,6 +161,11 @@ export function validateSourceBundle(bundle){
   for(const h of r.horses){if(!/^(?:[1-9]|1[0-8])$/.test(String(h.umaban))||!h.name||!h.trainingNote||!h.comment||strictNumber(h.trainingScore)===null)throw Error('馬情報・調教・コメントが不足しています');
     const subject=h.comment.match(/^[◎○▲△×]?([^【]+)【/)?.[1];if(nameKey(subject)!==nameKey(h.name))throw Error('コメントの対象馬が一致しません');
     for(const k of ['best','start','oikake','agari','avg5','dist','course','r1','r2','r3'])if(h[k]!==''&&h[k]!=null)indexValue(h[k]);
+    if(h.surfaceContextVersion!=null){
+      if(h.surfaceContextVersion!==1||!Array.isArray(h.recentSurfaces)||h.recentSurfaces.length>5||h.recentSurfaces.some(s=>!['芝','ダート'].includes(s)))throw Error('近走の芝ダ履歴が不正です');
+      const expected=surfaceContextFromHistory(h.recentSurfaces,r.surface);
+      if(h.surfaceSwitch!==expected.surfaceSwitch||h.surfaceRunNo!==expected.surfaceRunNo)throw Error('芝ダ履歴と馬場替わりの判定が一致しません');
+    }
   }
   return r;
 }
@@ -180,3 +188,4 @@ export function validateSourceCollection(data){
   });
   return [...bundles].sort((a,b)=>a.race.raceDate.localeCompare(b.race.raceDate)||a.race.track.localeCompare(b.race.track,'ja')||Number(a.race.raceNumber)-Number(b.race.raceNumber));
 }
+

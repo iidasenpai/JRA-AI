@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { validateSourceBundle, validateSourceCollection, sourceRaceKey } from "./sourceIngestion";
 import { validateResultCollection, planResultImport } from "./resultIngestion";
 import { persistSourceBatchSave } from "./sourceBatchSave";
+import { parseSurfaceHistory, evaluationCoverage, evaluationLabel } from "./raceContext";
+import EvaluationCoverage from "./EvaluationCoverage";
 import { learnFromRace } from "./learning";
 import { computeHorses,rankHorses } from "./prediction";
 import { MODEL_VERSION, strictNumber, parseBodyDelta, cleanHorse, migrateRaces, predictionHorses, predictionOrder, actualHorses, resultNumbers, reviewOf, eligibleRace, replayLearning, freezePrediction, eventKey, evaluateRecords, midPercentile, confidenceAssessment } from "./integrity";
@@ -971,32 +973,7 @@ export default function JRAPredictionTool() {
 
       // 近走の芝/ダートを取得し、芝⇔ダート替わりを自動判定。障害は対象外。
       // 詳細出馬表の近走レース行だけを使い、集計行は除外する。
-      const recentSurfaces:string[] = [];
-      for (const line of block) {
-        if (/^(?:全場|重不ダ)/.test(line)) continue;
-        const compact = line.replace(/\s+/g, "");
-        // 競馬場名を伴う近走行を優先し、集計値の芝/ダ表記を誤検出しにくくする。
-        const sm = compact.match(/(?:札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉)(芝|ダ(?:ート)?)\d{3,4}m?/);
-        if (sm) recentSurfaces.push(sm[1] === "芝" ? "芝" : "ダート");
-        if (recentSurfaces.length >= 5) break;
-      }
-      h.recentSurfaces = recentSurfaces;
-      h.surfaceSwitch = "";
-      h.surfaceRunNo = 0;
-      if (recentSurfaces.length) {
-        const currentSurface = surface === "芝" ? "芝" : "ダート";
-        const otherSurface = currentSurface === "芝" ? "ダート" : "芝";
-        if (recentSurfaces[0] === otherSurface) {
-          h.surfaceSwitch = `${otherSurface}→${currentSurface}`;
-          h.surfaceRunNo = 1;
-        } else if (recentSurfaces[0] === currentSurface) {
-          const firstOther = recentSurfaces.findIndex((x)=>x===otherSurface);
-          if (firstOther === 1 || firstOther === 2) {
-            h.surfaceSwitch = `${otherSurface}→${currentSurface}`;
-            h.surfaceRunNo = firstOther + 1;
-          }
-        }
-      }
+      Object.assign(h, parseSurfaceHistory(block, surface));
 
       // 近5走の通過順位から補助脚質を作る。公式脚質が無い時だけ採用。
       const positions:number[] = [];
@@ -2403,6 +2380,8 @@ export default function JRAPredictionTool() {
     return { total, topWin, topPlace, markedTop3, totalTop3 };
   }, [savedRaces]);
 
+  const coverage = useMemo(() => evaluationCoverage(ranked), [ranked]);
+
   const dataQuality = useMemo(() => {
     const total = ranked.length;
     if (!total) return { score: 0, label: "未入力", issues: ["出走馬データがありません"], core: 0, training: 0, comments: 0 };
@@ -2418,8 +2397,8 @@ export default function JRAPredictionTool() {
     if(comments<total) issues.push(`コメント不足 ${total-comments}頭`);
     if(unknown)issues.push(`補助評価・材料不足 ${unknown}頭`);
     if(oddsOn && odds<total) issues.push(`人気・オッズ不足 ${total-odds}頭`);
-    return { score, label: score>=85?"良好":score>=65?"概ね良好":score>=45?"注意":"不足", issues, core, training, comments };
-  }, [ranked,oddsOn]);
+    return { score, label: score>=85?"良好":score>=65?"概ね良好":score>=45?"注意":"不足", issues, core, training, comments, evaluationScope:{total:coverage.total,compared:coverage.compared,indexed:coverage.indexed,auxiliary:coverage.auxiliary,held:coverage.held.length} };
+  }, [ranked,oddsOn,coverage]);
 
   const confidence = useMemo(()=>confidenceAssessment(ranked,dataQuality,savedRaces,experimentalOn),[ranked,dataQuality,savedRaces,experimentalOn]);
 
@@ -2428,8 +2407,8 @@ export default function JRAPredictionTool() {
     const unknown=ranked.filter(h=>h._evaluationStatus!=="指数評価").length;
     const eligible=savedRaces.filter(r=>eligibleRace(r)&&r.predictionSnapshot?.provenance==='prospective'&&r.modelVersion===MODEL_VERSION && !!r.experimentalOn===experimentalOn);
     const wins=eligible.filter(r=>String(predictionOrder(r)[0]?.umaban)===resultNumbers(r)[0]).length;
-    return {grade:main?confidence.grade:'-',label:!main?'判定待ち':unknown?'材料不足を含む候補':'予想候補',ticket:main?`◎ ${main.umaban}`:'未判定',reason:`${unknown}頭は補助評価または材料不足。同版の事前固定記録${eligible.length}件。購入・確定払戻の記録がないため収益性は未検証。`,historyN:eligible.length,historyWins:wins,historyWinRate:eligible.length?wins/eligible.length*100:0,breakEven:null,minOdds:null,main};
-  },[ranked,confidence,savedRaces,experimentalOn]);
+    return {grade:main?confidence.grade:'-',label:!main?'評価保留':coverage.held.length?'一部評価保留の候補':coverage.auxiliary?'補助評価を含む候補':'予想候補',ticket:main?`◎ ${main.umaban}`:'未判定',reason:`評価範囲 ${coverage.compared}/${coverage.total}頭。同版の事前固定記録${eligible.length}件。購入・確定払戻の記録がないため収益性は未検証。`,historyN:eligible.length,historyWins:wins,historyWinRate:eligible.length?wins/eligible.length*100:0,breakEven:null,minOdds:null,main};
+  },[ranked,confidence,savedRaces,experimentalOn,coverage]);
 
   const buildReview = reviewOf;
 
@@ -2687,7 +2666,7 @@ export default function JRAPredictionTool() {
       )}
 
       <div className="mx-3 mt-3 rounded-lg border border-slate-600 p-3 text-xs">
-        v3.13.6 ／ 事前固定の検証 {integrityStats.prospective.n}件・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
+        v3.13.7 ／ 事前固定の検証 {integrityStats.prospective.n}件・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
         <label className="mt-2 mb-2 flex gap-2"><input type="checkbox" checked={experimentalOn} onChange={e=>setExperimentalOn(e.target.checked)} />新しい評価方式を検証する（指数不足の補助評価・固定頭数。過去比較で優位性未確認）</label>
         <div className="mt-1">旧記録の予想は保存値を保持します。修正後の再予想を過去の的中実績には加えません。発走日時未入力の新規記録も事前検証とは分けます。</div>
       </div>
@@ -2957,6 +2936,8 @@ export default function JRAPredictionTool() {
         </div>
       )}
 
+      <EvaluationCoverage coverage={coverage} />
+
       {/* 注目馬・波乱度・学習状況 */}
       {raceAnalytics.marked.length > 0 && (
         <div id="marked-summary" className="mx-3 mt-3 scroll-mt-24 grid gap-3 lg:grid-cols-3">
@@ -3128,6 +3109,8 @@ export default function JRAPredictionTool() {
                         className="w-full border-none bg-transparent text-sm font-bold"
                         placeholder="馬名"
                       />
+                      {evaluationLabel(h) !== "指数評価" && <div className="mt-1 text-[10px] font-bold text-amber-700">{evaluationLabel(h)}</div>}
+                      {h.surfaceSwitch && <div className="mt-1 text-[10px] font-normal text-slate-500">{h.surfaceSwitch} {h.surfaceRunNo === 1 ? "替わり初戦" : `替わり${h.surfaceRunNo}走目`}</div>}
                       {h.comment && <div className="text-[9px] text-gray-400 font-normal leading-tight mt-1 max-w-40" title={h.comment}>{h.comment.slice(0,32)}{h.comment.length>32?"…":""}</div>}
                     </td>
                     <td className={cellBase}>
@@ -3343,3 +3326,4 @@ export default function JRAPredictionTool() {
     </fieldset>
   );
 }
+
