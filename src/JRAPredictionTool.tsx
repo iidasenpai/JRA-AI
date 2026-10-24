@@ -2666,7 +2666,7 @@ export default function JRAPredictionTool() {
       )}
 
       <div className="mx-3 mt-3 rounded-lg border border-slate-600 p-3 text-xs">
-        v3.13.7 ／ 事前固定の検証 {integrityStats.prospective.n}件・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
+        v3.13.8 ／ 事前固定の検証 {integrityStats.prospective.n}件・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
         <label className="mt-2 mb-2 flex gap-2"><input type="checkbox" checked={experimentalOn} onChange={e=>setExperimentalOn(e.target.checked)} />新しい評価方式を検証する（指数不足の補助評価・固定頭数。過去比較で優位性未確認）</label>
         <div className="mt-1">旧記録の予想は保存値を保持します。修正後の再予想を過去の的中実績には加えません。発走日時未入力の新規記録も事前検証とは分けます。</div>
       </div>

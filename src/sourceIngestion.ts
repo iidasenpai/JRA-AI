@@ -3,7 +3,7 @@ import { strictNumber } from './integrity';
 import { parseSurfaceHistory, surfaceContextFromHistory } from './raceContext';
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 const normalize=s=>String(s||'').replace(/\r/g,'').replace(/\u00a0/g,' ');
-const indexValue=s=>{const t=String(s||'').trim();if(/^(?:-|--|未)$/.test(t))return '';const n=strictNumber(t);if(n===null||n< -200||n>200)throw Error(`指数列に異常値: ${t}`);return String(n);};
+const indexValue=s=>{const t=String(s||'').trim();if(/^(?:-|--|未)$/.test(t))return '';const n=strictNumber(t);if(n===null)throw Error(`指数列が数値ではありません: ${t}`);return String(n);};
 const nameKey=s=>String(s||'').replace(/[\s・･]/g,'');
 const tracks='札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉';
 const fit=(a,b,c,d)=>{const total=a+b+c+d;return total?String(Math.round(clamp(50+((a+b*.66+c*.4)/total-.25)*42*total/(total+5),35,72))):'50';};
@@ -126,8 +126,8 @@ export function parseCollectedPages(pages, acquiredAt=new Date().toISOString()){
   for(let i=0;i<recentHeads.length;i++){
     const m=recentHeads[i],h=horses.find(h=>h.umaban===m[1]);if(!h||nameKey(h.name)!==nameKey(m[2]))throw Error('近5走の馬名不一致');
     const b=recent.slice(m.index,i+1<recentHeads.length?recentHeads[i+1].index:recent.length);
-    const average=b.match(/\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t([\d.]+)\t(\d{1,2})(?:\n|$)/)
-      || b.match(/\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)\t((?:\d+(?:\.\d+)?\*?)|-)(?:\n|$)/);
+    const average=b.match(/\t((?:[+-]?\d+(?:\.\d+)?\*?)|-)\t((?:[+-]?\d+(?:\.\d+)?\*?)|-)\t((?:[+-]?\d+(?:\.\d+)?\*?)|-)\t((?:[+-]?\d+(?:\.\d+)?\*?)|-)\t([\d.]+)\t(\d{1,2})(?:\n|$)/)
+      || b.match(/\t((?:[+-]?\d+(?:\.\d+)?\*?)|-)\t((?:[+-]?\d+(?:\.\d+)?\*?)|-)\t((?:[+-]?\d+(?:\.\d+)?\*?)|-)\t((?:[+-]?\d+(?:\.\d+)?\*?)|-)(?:\n|$)/);
     if(!average)throw Error(`馬番${h.umaban}の近5走集計が不明`);
     h.avgStart=indexValue(average[2]);h.avgChase=indexValue(average[3]);h.avgAgari=indexValue(average[4]);
     h.sourceRecentAverage=indexValue(average[1]);
