@@ -5,6 +5,17 @@ import { strictNumber } from './integrity';
 const tracks='札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉|門別|盛岡|水沢|浦和|船橋|大井|川崎|金沢|笠松|名古屋|園田|姫路|高知|佐賀';
 const normalize=value=>(Array.isArray(value)?value.join('\n'):String(value||'')).normalize('NFKC').replace(/\r/g,'').replace(/\u00a0/g,' ');
 
+const courseSurface=run=>{
+  const explicit=run.match(/(?:^|\n|[ \t])(芝|ダ(?:ート)?)\s*(?:直(?:線)?\s*)?\d{3,4}m?(?=\s|[（(右左直ABCD]|$)/)
+    || run.replace(/\s+/g,'').match(new RegExp(`(?:${tracks})(芝|ダ(?:ート)?)(?:直(?:線)?)?\\d{3,4}m?`));
+  if(explicit)return explicit[1]==='芝'?'芝':'ダート';
+  // netkeiba omits 芝 for Niigata's straight 1000m. Require both venue and
+  // distance; an unlabelled 直 course elsewhere must not be guessed as turf.
+  const niigata=new RegExp(`(?:^|\\n)[ \\t]*(?:(?:(?:20)?\\d{2}/)?\\d{1,2}/\\d{1,2}[ \\t]+)?新潟(?:[ \\t]|直|$)`);
+  if(niigata.test(run)&&/(?:^|\n|[ \t]|新潟)直(?:線)?\s*1000m?(?=\s|[（(ABCD]|$)/.test(run))return '芝';
+  return null;
+};
+
 export function surfaceContextFromHistory(recentSurfaces,currentSurface){
   let surfaceSwitch='',surfaceRunNo=0;
   const current=currentSurface==='芝'?'芝':'ダート',other=current==='芝'?'ダート':'芝';
@@ -15,7 +26,7 @@ export function surfaceContextFromHistory(recentSurfaces,currentSurface){
 
 // Read only this horse's past-race rows, never aggregate course stats or predictions.
 export function parseSurfaceHistory(block,currentSurface){
-  const text=normalize(block).split(/\n\s*(?:全場|重不[芝ダ]|AI展開予測|競馬新聞の見方)/)[0];
+  const text=normalize(block).split(/\n\s*(?:全場|重不[芝ダ直]|AI展開予測|競馬新聞の見方)/)[0];
   const dateRows=new RegExp(`(?:^|\\n)[ \\t]*(?:(?:20)?\\d{2}/)?\\d{1,2}/\\d{1,2}[ \\t]+(?:${tracks})[^\\n]*`,'g');
   const starts=[...text.matchAll(dateRows)],recentSurfaces=[];
   if(starts.length){
@@ -23,18 +34,21 @@ export function parseSurfaceHistory(block,currentSurface){
       const run=text.slice(starts[i].index,i+1<starts.length?starts[i+1].index:text.length);
       if(/(?:障害|障\s*\d{3,4})/.test(run))continue;
       if(/(?:^|\n)\s*(?:取|取消|除外)\s*(?:\n|$)/.test(run))continue;
-      const m=run.match(/(?:^|\n|[ \t])(芝|ダ(?:ート)?)\s*\d{3,4}m?(?=\s|[（(右左直ABCD]|$)/)
-        || run.replace(/\s+/g,'').match(new RegExp(`(?:${tracks})(芝|ダ(?:ート)?)\\d{3,4}m?`));
-      if(m)recentSurfaces.push(m[1]==='芝'?'芝':'ダート');
+      const surface=courseSurface(run);
+      // Never close a gap by moving an older start to the most recent slot.
+      // Stop at an unreadable start rather than inventing a surface switch.
+      if(!surface)break;
+      recentSurfaces.push(surface);
     }
   }else{
     // Also support the compact past-race rows used by manual text input.
-    const compactRow=new RegExp(`(?:${tracks})(芝|ダ(?:ート)?)\\d{3,4}m?`);
-    const aggregate=new RegExp(`^(?:${tracks})(?:芝|ダ(?:ート)?)\\d{3,4}m?\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+(?:\\s|$)`);
+    const aggregate=new RegExp(`^(?:${tracks})(?:芝|ダ(?:ート)?|直)\\d{3,4}m?\\s+\\d+\\s+\\d+\\s+\\d+\\s+\\d+(?:\\s|$)`);
     for(const line of text.split('\n')){
       if(aggregate.test(line.trim())||/障害|障\d/.test(line))continue;
-      const m=line.replace(/\s+/g,'').match(compactRow);
-      if(m)recentSurfaces.push(m[1]==='芝'?'芝':'ダート');
+      if(/(?:取消|除外)/.test(line))continue;
+      const surface=courseSurface(line);
+      if(surface)recentSurfaces.push(surface);
+      else if(new RegExp(`^\\s*(?:${tracks})`).test(line))break;
       if(recentSurfaces.length===5)break;
     }
   }
