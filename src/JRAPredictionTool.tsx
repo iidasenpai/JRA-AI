@@ -1,9 +1,6 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { validateSourceBundle, validateSourceCollection, sourceRaceKey } from "./sourceIngestion";
 import { validateResultCollection, planResultImport } from "./resultIngestion";
-import { persistSourceBatchSave } from "./sourceBatchSave";
-import { parseSurfaceHistory, evaluationCoverage, evaluationLabel } from "./raceContext";
-import EvaluationCoverage from "./EvaluationCoverage";
 import { learnFromRace } from "./learning";
 import { computeHorses,rankHorses } from "./prediction";
 import { MODEL_VERSION, strictNumber, parseBodyDelta, cleanHorse, migrateRaces, predictionHorses, predictionOrder, actualHorses, resultNumbers, reviewOf, eligibleRace, replayLearning, freezePrediction, eventKey, evaluateRecords, midPercentile, confidenceAssessment } from "./integrity";
@@ -313,8 +310,6 @@ export default function JRAPredictionTool() {
   const [resultImportMessage,setResultImportMessage]=useState("");
   const resultImportPlan=useMemo(()=>resultImportData?planResultImport(savedRaces,resultImportData):null,[savedRaces,resultImportData]);
   const [sourceCollection,setSourceCollection]=useState<any[]>([]);
-  const [sourceBatchBusy,setSourceBatchBusy]=useState(false);
-  const sourceBatchLock=useRef(false);
   const [sourceSelection,setSourceSelection]=useState("");
   const [sourceMessage,setSourceMessage]=useState("");
   useEffect(()=>{(async()=>{
@@ -411,9 +406,8 @@ export default function JRAPredictionTool() {
   }, [loaded, raceName,raceDate,raceNumber,scheduledStart,track, surface, distance, going, raceClass, paceType, learningOn, learned, historyCount, learningHistory, horses, weights, agariBonus, oddsOn,experimentalOn, decayScale, oddsStrength]);
 
   useEffect(() => {
-    if (!loaded || sourceBatchBusy) return;
+    if (!loaded) return;
     const t = setTimeout(async () => {
-      if(sourceBatchLock.current)return;
       try {
         await window.storage.set("jra-saved-races", JSON.stringify(savedRaces));
       } catch (e) {
@@ -421,7 +415,7 @@ export default function JRAPredictionTool() {
       }
     }, 250);
     return () => clearTimeout(t);
-  }, [loaded, savedRaces, sourceBatchBusy]);
+  }, [loaded, savedRaces]);
 
   const flash = (msg) => {
     setStatus(msg);
@@ -581,7 +575,7 @@ export default function JRAPredictionTool() {
       await window.storage.set("jra-source-collection",JSON.stringify({type:"jra-ai-source-collection",version:1,bundles:rows}));
       setSourceCollection(rows);setSourceSelection(sourceRaceKey(rows[0]));
       if(rows.length===1)applySourceBundle(rows[0]);
-      else setSourceMessage(`${rows.length}レースを読み込みました。「全レースを一括保存」でまとめて保存できます。`);
+      else setSourceMessage(`${rows.length}レースを読み込みました。下の一覧からレースを選んで開いてください。`);
     }catch(e){setSourceMessage(e instanceof Error?e.message:"取得データを読み込めませんでした");}};input.click();
   };
   const openSelectedSource = () => {
@@ -589,19 +583,6 @@ export default function JRAPredictionTool() {
     if(!bundle)return;
     if(horses.length&&!window.confirm("入力中の内容を選択したレースに切り替えます。未保存の編集は失われます。続けますか？"))return;
     applySourceBundle(bundle);
-  };
-
-  const saveAllSourceRaces = async () => {
-    if(sourceBatchLock.current||!sourceCollection.length)return;
-    sourceBatchLock.current=true;setSourceBatchBusy(true);
-    try {
-      const plan=await persistSourceBatchSave(savedRaces,{type:"jra-ai-source-collection",version:1,bundles:sourceCollection},
-        {weights,agariBonus,oddsOn,oddsStrength,paceType,learningOn,learned,experimentalOn,decayScale},
-        {prepareHorse:autoCompleteHorseFactors,write:(key,value)=>window.storage.set(key,value)});
-      if(plan.added){setSavedRaces(plan.records);setSavedRacesOpen(true);}
-      setSourceMessage(`一括保存 ${plan.added}件 ／ 保存済み等 ${plan.skipped}件${plan.afterStart?` ／ 発走後の参考保存 ${plan.afterStart}件`:""}${plan.unrated?` ／ 評価保留 ${plan.unrated}件`:""}\n`+plan.report.map(r=>`${r.label}：${r.reason}`).join("\n"));
-    } catch(e){setSourceMessage(`一括保存できませんでした。保存先の空き容量などを確認してください。${e instanceof Error?e.message:""}`);}
-    finally {sourceBatchLock.current=false;setSourceBatchBusy(false);}
   };
 
   const addHorse = () => setHorses((h) => [...h, { ...emptyHorse(), umaban: h.length + 1 }]);
@@ -973,7 +954,32 @@ export default function JRAPredictionTool() {
 
       // 近走の芝/ダートを取得し、芝⇔ダート替わりを自動判定。障害は対象外。
       // 詳細出馬表の近走レース行だけを使い、集計行は除外する。
-      Object.assign(h, parseSurfaceHistory(block, surface));
+      const recentSurfaces:string[] = [];
+      for (const line of block) {
+        if (/^(?:全場|重不ダ)/.test(line)) continue;
+        const compact = line.replace(/\s+/g, "");
+        // 競馬場名を伴う近走行を優先し、集計値の芝/ダ表記を誤検出しにくくする。
+        const sm = compact.match(/(?:札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉)(芝|ダ(?:ート)?)\d{3,4}m?/);
+        if (sm) recentSurfaces.push(sm[1] === "芝" ? "芝" : "ダート");
+        if (recentSurfaces.length >= 5) break;
+      }
+      h.recentSurfaces = recentSurfaces;
+      h.surfaceSwitch = "";
+      h.surfaceRunNo = 0;
+      if (recentSurfaces.length) {
+        const currentSurface = surface === "芝" ? "芝" : "ダート";
+        const otherSurface = currentSurface === "芝" ? "ダート" : "芝";
+        if (recentSurfaces[0] === otherSurface) {
+          h.surfaceSwitch = `${otherSurface}→${currentSurface}`;
+          h.surfaceRunNo = 1;
+        } else if (recentSurfaces[0] === currentSurface) {
+          const firstOther = recentSurfaces.findIndex((x)=>x===otherSurface);
+          if (firstOther === 1 || firstOther === 2) {
+            h.surfaceSwitch = `${otherSurface}→${currentSurface}`;
+            h.surfaceRunNo = firstOther + 1;
+          }
+        }
+      }
 
       // 近5走の通過順位から補助脚質を作る。公式脚質が無い時だけ採用。
       const positions:number[] = [];
@@ -2380,8 +2386,6 @@ export default function JRAPredictionTool() {
     return { total, topWin, topPlace, markedTop3, totalTop3 };
   }, [savedRaces]);
 
-  const coverage = useMemo(() => evaluationCoverage(ranked), [ranked]);
-
   const dataQuality = useMemo(() => {
     const total = ranked.length;
     if (!total) return { score: 0, label: "未入力", issues: ["出走馬データがありません"], core: 0, training: 0, comments: 0 };
@@ -2397,8 +2401,8 @@ export default function JRAPredictionTool() {
     if(comments<total) issues.push(`コメント不足 ${total-comments}頭`);
     if(unknown)issues.push(`補助評価・材料不足 ${unknown}頭`);
     if(oddsOn && odds<total) issues.push(`人気・オッズ不足 ${total-odds}頭`);
-    return { score, label: score>=85?"良好":score>=65?"概ね良好":score>=45?"注意":"不足", issues, core, training, comments, evaluationScope:{total:coverage.total,compared:coverage.compared,indexed:coverage.indexed,auxiliary:coverage.auxiliary,held:coverage.held.length} };
-  }, [ranked,oddsOn,coverage]);
+    return { score, label: score>=85?"良好":score>=65?"概ね良好":score>=45?"注意":"不足", issues, core, training, comments };
+  }, [ranked,oddsOn]);
 
   const confidence = useMemo(()=>confidenceAssessment(ranked,dataQuality,savedRaces,experimentalOn),[ranked,dataQuality,savedRaces,experimentalOn]);
 
@@ -2407,8 +2411,8 @@ export default function JRAPredictionTool() {
     const unknown=ranked.filter(h=>h._evaluationStatus!=="指数評価").length;
     const eligible=savedRaces.filter(r=>eligibleRace(r)&&r.predictionSnapshot?.provenance==='prospective'&&r.modelVersion===MODEL_VERSION && !!r.experimentalOn===experimentalOn);
     const wins=eligible.filter(r=>String(predictionOrder(r)[0]?.umaban)===resultNumbers(r)[0]).length;
-    return {grade:main?confidence.grade:'-',label:!main?'評価保留':coverage.held.length?'一部評価保留の候補':coverage.auxiliary?'補助評価を含む候補':'予想候補',ticket:main?`◎ ${main.umaban}`:'未判定',reason:`評価範囲 ${coverage.compared}/${coverage.total}頭。同版の事前固定記録${eligible.length}件。購入・確定払戻の記録がないため収益性は未検証。`,historyN:eligible.length,historyWins:wins,historyWinRate:eligible.length?wins/eligible.length*100:0,breakEven:null,minOdds:null,main};
-  },[ranked,confidence,savedRaces,experimentalOn,coverage]);
+    return {grade:main?confidence.grade:'-',label:!main?'判定待ち':unknown?'材料不足を含む候補':'予想候補',ticket:main?`◎ ${main.umaban}`:'未判定',reason:`${unknown}頭は補助評価または材料不足。同版の事前固定記録${eligible.length}件。購入・確定払戻の記録がないため収益性は未検証。`,historyN:eligible.length,historyWins:wins,historyWinRate:eligible.length?wins/eligible.length*100:0,breakEven:null,minOdds:null,main};
+  },[ranked,confidence,savedRaces,experimentalOn]);
 
   const buildReview = reviewOf;
 
@@ -2637,7 +2641,7 @@ export default function JRAPredictionTool() {
   const cellBase = "px-2 py-1.5 text-sm text-center border-b border-gray-100 whitespace-nowrap";
 
   return (
-    <fieldset disabled={sourceBatchBusy} className="dark-app min-w-0 border-0 m-0 p-0 min-h-screen bg-slate-950 text-slate-100 pb-16">
+    <div className="dark-app min-h-screen bg-slate-950 text-slate-100 pb-16">
       {/* ヘッダー */}
       <div className="bg-gray-900 text-white px-3 py-3 flex items-center justify-between sticky top-0 z-20">
         <div className="flex items-center gap-2">
@@ -2666,7 +2670,7 @@ export default function JRAPredictionTool() {
       )}
 
       <div className="mx-3 mt-3 rounded-lg border border-slate-600 p-3 text-xs">
-        v3.13.8 ／ 事前固定の検証 {integrityStats.prospective.n}件・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
+        v3.13.4 ／ 事前固定の検証 {integrityStats.prospective.n}件・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
         <label className="mt-2 mb-2 flex gap-2"><input type="checkbox" checked={experimentalOn} onChange={e=>setExperimentalOn(e.target.checked)} />新しい評価方式を検証する（指数不足の補助評価・固定頭数。過去比較で優位性未確認）</label>
         <div className="mt-1">旧記録の予想は保存値を保持します。修正後の再予想を過去の的中実績には加えません。発走日時未入力の新規記録も事前検証とは分けます。</div>
       </div>
@@ -2681,8 +2685,6 @@ export default function JRAPredictionTool() {
               {sourceCollection.map(b=><option key={sourceRaceKey(b)} value={sourceRaceKey(b)}>{b.race.raceDate} {b.race.track}{b.race.raceNumber}R {b.race.raceName}（{b.race.horses.length}頭）</option>)}
             </select>
           </label>
-          <button onClick={saveAllSourceRaces} disabled={sourceBatchBusy} className="rounded bg-indigo-700 px-4 py-3 text-base font-bold disabled:opacity-50">{sourceBatchBusy?"保存中…":`全${sourceCollection.length}レースを一括保存`}</button>
-          <div className="w-full text-slate-300">現在の設定で予想を計算して保存します。保存済みのレースは保持し、発走後は参考予想として保存します。新馬などの評価保留データも保存できます。</div>
           <button onClick={openSelectedSource} className="rounded bg-emerald-700 px-3 py-2 font-bold">選んだレースを開く</button>
           {sourceCollection.find(b=>sourceRaceKey(b)===sourceSelection)?.notes?.map((note,i)=><div key={i} className="w-full text-amber-300">{note}</div>)}
           <div className="w-full text-slate-300">取得日時（日本時間）：{new Date(sourceCollection.find(b=>sourceRaceKey(b)===sourceSelection)?.acquiredAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}。オッズ・馬体重・馬場は取得時点の情報です。</div>
@@ -2936,8 +2938,6 @@ export default function JRAPredictionTool() {
         </div>
       )}
 
-      <EvaluationCoverage coverage={coverage} />
-
       {/* 注目馬・波乱度・学習状況 */}
       {raceAnalytics.marked.length > 0 && (
         <div id="marked-summary" className="mx-3 mt-3 scroll-mt-24 grid gap-3 lg:grid-cols-3">
@@ -3109,8 +3109,6 @@ export default function JRAPredictionTool() {
                         className="w-full border-none bg-transparent text-sm font-bold"
                         placeholder="馬名"
                       />
-                      {evaluationLabel(h) !== "指数評価" && <div className="mt-1 text-[10px] font-bold text-amber-700">{evaluationLabel(h)}</div>}
-                      {h.surfaceSwitch && <div className="mt-1 text-[10px] font-normal text-slate-500">{h.surfaceSwitch} {h.surfaceRunNo === 1 ? "替わり初戦" : `替わり${h.surfaceRunNo}走目`}</div>}
                       {h.comment && <div className="text-[9px] text-gray-400 font-normal leading-tight mt-1 max-w-40" title={h.comment}>{h.comment.slice(0,32)}{h.comment.length>32?"…":""}</div>}
                     </td>
                     <td className={cellBase}>
@@ -3270,7 +3268,6 @@ export default function JRAPredictionTool() {
                     </div>
                     <span className={`shrink-0 rounded px-2 py-1 text-[10px] font-bold ${race.status === "completed" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{race.status === "completed" ? "結果入力済み" : "結果待ち"}</span>
                   </div>
-                  {race.sourceBatch?.savedAfterStart&&<div className="mt-2 text-xs text-amber-600">発走後の参考保存：発走前の検証実績には含めません。</div>}
                   {race.resultImport&&<details className="mt-2 text-xs text-slate-700"><summary>取得した結果・払戻 {race.resultOrder}（100円あたり）</summary>
                     <div className="mt-1">{race.horses.map(h=>`${h.umaban} ${h.name}：${h.finish}${/^\d+$/.test(h.finish)?'着':''}`).join(' ／ ')}</div>
                     {race.resultPayouts?.length?race.resultPayouts.map((p,i)=><div key={i}>{p.type} {p.combination.join('-')}：{p.amount.toLocaleString('ja-JP')}円</div>):<div>払戻未取得</div>}
@@ -3323,7 +3320,6 @@ export default function JRAPredictionTool() {
         </div>
       )}
 
-    </fieldset>
+    </div>
   );
 }
-
