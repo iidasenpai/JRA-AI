@@ -44,6 +44,8 @@ export const predictionOrder = race => [...predictionHorses(race)].sort((a,b)=>{
   const p=h=>h.mark==='◎'?0:h.mark==='○'?1:h.mark==='▲'?2:3;
   return p(a)-p(b) || (a._rank??999)-(b._rank??999) || Number(b.predictedScore??-999)-Number(a.predictedScore??-999);
 });
+// A ranked first horse is not necessarily a saved favorite (e.g. unscored debut races).
+export const predictionFavorite = race => predictionHorses(race).find(h=>h.mark==='◎');
 export const actualHorses = race => resultNumbers(race).map((n,i)=>({...((race.horses||[]).find(h=>String(h.umaban)===n)),finish:String(i+1)}));
 export const rosterKey = race => `${race.track}|${race.surface}|${race.distance}|${(race.horses||[]).map(h=>`${h.umaban}:${h.name}`).sort().join('|')}`;
 export const eventKey = race => race.raceDate && race.raceNumber ? `${race.raceDate}|${race.track}|${race.raceNumber}`:null;
@@ -85,7 +87,7 @@ export const migrateRaces = input => {
 };
 export const reviewOf = race => {
   const actual=actualHorses(race);if(actual.length!==3)return null;
-  const pred=predictionOrder(race),top=pred[0];
+  const pred=predictionOrder(race),top=predictionFavorite(race);
   const marked=new Map(pred.map(h=>[String(h.umaban),h.mark]));
   const hit=actual.filter(h=>['◎','○','▲','△','☆'].includes(marked.get(String(h.umaban)))).length;
   const missed=actual.filter(h=>!['◎','○','▲','△','☆'].includes(marked.get(String(h.umaban))));
@@ -93,6 +95,7 @@ export const reviewOf = race => {
   if(race.integrity?.quarantined)notes.push('要確認：学習・成績集計から除外。'+race.integrity.issues.join('／'));
   if(race.predictionSnapshot?.provenance==='legacy-unverified')notes.push('旧記録：レース前の固定予想であることは確認できません');
   for(const h of missed)notes.push(`${h.umaban} ${h.name}: ${h._rank==null?'評価材料不足':'無印で好走'}。原因は未確定、入力・適性・展開を確認`);
+  if(!top)notes.push('保存した◎はありません。本命の成績集計対象外です');
   if(top)notes.push(`保存した◎ ${top.umaban} ${top.name}：${actual.some(h=>String(h.umaban)===String(top.umaban))?'3着以内':'3着外'}。上位3頭の捕捉 ${hit}/3`);
   return {grade:top&&String(top.umaban)===String(actual[0].umaban)?'A':hit===3?'B':hit===2?'C':hit===1?'D':'E',actual,top,missed,notes};
 };
@@ -109,8 +112,8 @@ export const replayLearning = (input,initial,learn) => {
   return {next,history:history.reverse(),count:history.length,races:races.map(r=>({...r,learningRebuiltVersion:MODEL_VERSION,learnedApplied:ledger.has(r.id),learningChanges:ledger.get(r.id)?.changes||{},learningLedger:ledger.get(r.id)||null}))};
 };
 export const evaluateRecords = races => {
-  const rows=races.filter(eligibleRace).map(r=>{const actual=resultNumbers(r),pred=predictionOrder(r),top=pred[0];return {id:r.id,provenance:r.predictionSnapshot?.provenance||'legacy-unverified',win:top&&String(top.umaban)===actual[0]?1:0,place:top&&actual.includes(String(top.umaban))?1:0,allMarked:actual.every(n=>pred.some(h=>String(h.umaban)===n&&['◎','○','▲','△','☆'].includes(h.mark)))?1:0};});
-  const stats=a=>({n:a.length,wins:a.reduce((s,r)=>s+r.win,0),places:a.reduce((s,r)=>s+r.place,0),allMarked:a.reduce((s,r)=>s+r.allMarked,0)});
+  const rows=races.filter(eligibleRace).map(r=>{const actual=resultNumbers(r),pred=predictionOrder(r),top=predictionFavorite(r);return {hasFavorite:!!top,id:r.id,provenance:r.predictionSnapshot?.provenance||'legacy-unverified',win:top&&String(top.umaban)===actual[0]?1:0,place:top&&actual.includes(String(top.umaban))?1:0,allMarked:actual.every(n=>pred.some(h=>String(h.umaban)===n&&['◎','○','▲','△','☆'].includes(h.mark)))?1:0};});
+  const stats=a=>({n:a.length,topN:a.filter(r=>r.hasFavorite).length,noTopN:a.filter(r=>!r.hasFavorite).length,wins:a.reduce((s,r)=>s+r.win,0),places:a.reduce((s,r)=>s+r.place,0),allMarked:a.reduce((s,r)=>s+r.allMarked,0)});
   return {all:stats(rows),prospective:stats(rows.filter(r=>r.provenance==='prospective')),legacy:stats(rows.filter(r=>r.provenance!=='prospective')),excluded:races.length-rows.length};
 };
 // All equal values must be neutral, missing values must not gain a percentile bonus.
@@ -124,7 +127,8 @@ export const confidenceAssessment = (ranked,quality,history=[],experimentalOn=fa
   const gap=Math.max(0,a[0]._winScore-a[1]._winScore),missing=ranked.filter(h=>h._evaluationStatus!=='指数評価').length/ranked.length;
   const score=Math.round(Math.max(5,Math.min(95,45+Math.min(35,gap*6)+(quality.score-60)*.15-missing*25)));
   const grade=score>=80?'A':score>=65?'B':score>=50?'C':score>=35?'D':'E';
-  const valid=history.filter(r=>eligibleRace(r)&&r.predictionSnapshot?.provenance==='prospective'&&r.modelVersion===MODEL_VERSION&&!!r.experimentalOn===experimentalOn&&r.confidenceSnapshot?.grade===grade);
-  const wins=valid.filter(r=>String(predictionOrder(r)[0]?.umaban)===resultNumbers(r)[0]).length;
+  const valid=history.filter(r=>eligibleRace(r)&&r.predictionSnapshot?.provenance==='prospective'&&r.modelVersion===MODEL_VERSION&&!!r.experimentalOn===experimentalOn&&r.confidenceSnapshot?.grade===grade&&!!predictionFavorite(r));
+  const wins=valid.filter(r=>String(predictionFavorite(r)?.umaban)===resultNumbers(r)[0]).length;
   return {score,grade,reasons:[`◎○の評価差 ${gap.toFixed(1)}`,`補助評価・材料不足 ${Math.round(missing*100)}%`,`予測勝率ではありません／同版の事前固定記録 ${valid.length}件${valid.length?`・◎勝率${(wins/valid.length*100).toFixed(1)}%`:''}`]};
 };
+

@@ -3,7 +3,7 @@ import { validateSourceBundle, validateSourceCollection, sourceRaceKey } from ".
 import { validateResultCollection, planResultImport } from "./resultIngestion";
 import { learnFromRace } from "./learning";
 import { computeHorses,rankHorses } from "./prediction";
-import { MODEL_VERSION, strictNumber, parseBodyDelta, cleanHorse, migrateRaces, predictionHorses, predictionOrder, actualHorses, resultNumbers, reviewOf, eligibleRace, replayLearning, freezePrediction, eventKey, evaluateRecords, midPercentile, confidenceAssessment } from "./integrity";
+import { MODEL_VERSION, strictNumber, parseBodyDelta, cleanHorse, migrateRaces, predictionHorses, predictionOrder, predictionFavorite, actualHorses, resultNumbers, reviewOf, eligibleRace, replayLearning, freezePrediction, eventKey, evaluateRecords, midPercentile, confidenceAssessment } from "./integrity";
 
 // ---- JRA公式に合わせた8枠カラー / 枠割り ----
 // 1白・2黒・3赤・4青・5黄・6緑・7橙・8桃
@@ -2368,7 +2368,7 @@ export default function JRAPredictionTool() {
 
   const learningSummary = useMemo(() => {
     const completed = savedRaces.filter(eligibleRace);
-    let topWin=0, topPlace=0, markedTop3=0, totalTop3=0, total=0;
+    let topWin=0, topPlace=0, markedTop3=0, totalTop3=0, total=0, topTotal=0;
     completed.forEach((r)=>{
       const all=(r.horses||[]);
       const actual=resultTop3Of(r);
@@ -2376,14 +2376,15 @@ export default function JRAPredictionTool() {
       total += 1;
       totalTop3 += 3;
       const pred=predictionOrder(r);
-      const top=pred[0];
+      const top=predictionFavorite(r);
+      if(top)topTotal++;
       const winner=actual.find((h:any)=>num(h.finish)===1);
       const actualIds=new Set(actual.map((h:any)=>String(h.id||h.umaban)));
       if(top && winner && String(top.id||top.umaban)===String(winner.id||winner.umaban)) topWin += 1;
       if(top && actualIds.has(String(top.id||top.umaban))) topPlace += 1;
       markedTop3 += actual.filter((h:any)=>predictionHorses(r).some(p=>String(p.umaban)===String(h.umaban)&&["◎","○","▲","△","☆"].includes(p.mark))).length;
     });
-    return { total, topWin, topPlace, markedTop3, totalTop3 };
+    return { total, topTotal, topWin, topPlace, markedTop3, totalTop3 };
   }, [savedRaces]);
 
   const dataQuality = useMemo(() => {
@@ -2409,8 +2410,8 @@ export default function JRAPredictionTool() {
   const buyDecision = useMemo(()=>{
     const main=ranked.find(h=>h._autoMark==="◎" && h.mark!=="消");
     const unknown=ranked.filter(h=>h._evaluationStatus!=="指数評価").length;
-    const eligible=savedRaces.filter(r=>eligibleRace(r)&&r.predictionSnapshot?.provenance==='prospective'&&r.modelVersion===MODEL_VERSION && !!r.experimentalOn===experimentalOn);
-    const wins=eligible.filter(r=>String(predictionOrder(r)[0]?.umaban)===resultNumbers(r)[0]).length;
+    const eligible=savedRaces.filter(r=>eligibleRace(r)&&r.predictionSnapshot?.provenance==='prospective'&&r.modelVersion===MODEL_VERSION && !!r.experimentalOn===experimentalOn&&!!predictionFavorite(r));
+    const wins=eligible.filter(r=>String(predictionFavorite(r)?.umaban)===resultNumbers(r)[0]).length;
     return {grade:main?confidence.grade:'-',label:!main?'判定待ち':unknown?'材料不足を含む候補':'予想候補',ticket:main?`◎ ${main.umaban}`:'未判定',reason:`${unknown}頭は補助評価または材料不足。同版の事前固定記録${eligible.length}件。購入・確定払戻の記録がないため収益性は未検証。`,historyN:eligible.length,historyWins:wins,historyWinRate:eligible.length?wins/eligible.length*100:0,breakEven:null,minOdds:null,main};
   },[ranked,confidence,savedRaces,experimentalOn]);
 
@@ -2422,12 +2423,13 @@ export default function JRAPredictionTool() {
       const key=`${r.track} ${r.surface}${r.distance||''}m / ${r.raceClass}`;
       const actual=resultTop3Of(r);
       if(actual.length<3)return;
-      const pred=predictionOrder(r);
+      const top=predictionFavorite(r);
+      if(!top)return;
       const st=map.get(key)||{key,races:0,wins:0,places:0}; st.races++;
       const winner=actual.find((h:any)=>num(h.finish)===1);
       const actualIds=new Set(actual.map((h:any)=>String(h.id||h.umaban)));
-      if(pred[0]&&winner&&String(pred[0].id||pred[0].umaban)===String(winner.id||winner.umaban))st.wins++;
-      if(pred[0]&&actualIds.has(String(pred[0].id||pred[0].umaban)))st.places++;
+      if(top&&winner&&String(top.id||top.umaban)===String(winner.id||winner.umaban))st.wins++;
+      if(top&&actualIds.has(String(top.id||top.umaban)))st.places++;
       map.set(key,st);
     });
     return [...map.values()].sort((a,b)=>b.races-a.races);
@@ -2439,7 +2441,7 @@ export default function JRAPredictionTool() {
       const actual=resultTop3Of(r);
       if(actual.length<3)return;
       const pred=predictionOrder(r);
-      const top=pred[0];
+      const top=predictionFavorite(r);
       const winner=actual.find((h:any)=>num(h.finish)===1);
       if(!top||!winner||String(top.id||top.umaban)===String(winner.id||winner.umaban))return;
       const fields:any[]=[
@@ -2459,19 +2461,21 @@ export default function JRAPredictionTool() {
 
   const backtest = useMemo(()=>{
     const completed=savedRaces.filter(eligibleRace);
-    let races=0, win=0, place=0, top3Capture=0;
+    let races=0, topRaces=0, win=0, place=0, top3Capture=0;
     completed.forEach(r=>{
       const actual=resultTop3Of(r);
       if(actual.length<3)return;
       const pred=predictionOrder(r);
       if(!pred.length)return; races++;
+      const top=predictionFavorite(r);
+      if(top)topRaces++;
       const winner=actual.find((h:any)=>num(h.finish)===1);
       const actualIds=new Set(actual.map((h:any)=>String(h.id||h.umaban)));
-      if(winner&&String(pred[0].id||pred[0].umaban)===String(winner.id||winner.umaban))win++;
-      if(actualIds.has(String(pred[0].id||pred[0].umaban)))place++;
+      if(top&&winner&&String(top.id||top.umaban)===String(winner.id||winner.umaban))win++;
+      if(top&&actualIds.has(String(top.id||top.umaban)))place++;
       top3Capture += actual.filter((h:any)=>predictionHorses(r).some(p=>String(p.umaban)===String(h.umaban)&&['◎','○','▲','△','☆'].includes(p.mark))).length;
     });
-    return {races,win,place,top3Capture};
+    return {races,topRaces,win,place,top3Capture};
   },[savedRaces]);
 
   const currentRaceSnapshot = (id: string = crypto.randomUUID(), previous: any = {}): any => ({
@@ -2670,7 +2674,7 @@ export default function JRAPredictionTool() {
       )}
 
       <div className="mx-3 mt-3 rounded-lg border border-slate-600 p-3 text-xs">
-        v3.13.4 ／ 事前固定の検証 {integrityStats.prospective.n}件・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
+        v3.13.4-fix1 ／ 事前固定の検証 {integrityStats.prospective.n}件（◎あり{integrityStats.prospective.topN}件）・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
         <label className="mt-2 mb-2 flex gap-2"><input type="checkbox" checked={experimentalOn} onChange={e=>setExperimentalOn(e.target.checked)} />新しい評価方式を検証する（指数不足の補助評価・固定頭数。過去比較で優位性未確認）</label>
         <div className="mt-1">旧記録の予想は保存値を保持します。修正後の再予想を過去の的中実績には加えません。発走日時未入力の新規記録も事前検証とは分けます。</div>
       </div>
@@ -3176,7 +3180,7 @@ export default function JRAPredictionTool() {
 
       <div className="mx-3 mt-3 rounded-xl border border-violet-200 bg-white p-3 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><div className="font-black text-violet-900">🧠 自動学習</div><div className="text-[10px] text-gray-500">結果保存時に好走馬と凡走馬を比較して重みを自動調整</div></div><div className="text-sm font-black text-violet-700">{historyCount}レース学習</div></div>
-        <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs"><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">◎勝率</div><div className="font-black">{learningSummary.total ? Math.round(learningSummary.topWin/learningSummary.total*100) : 0}% <span className="text-[9px] text-gray-400">({learningSummary.topWin}/{learningSummary.total})</span></div></div><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">◎複勝率</div><div className="font-black">{learningSummary.total ? Math.round(learningSummary.topPlace/learningSummary.total*100) : 0}% <span className="text-[9px] text-gray-400">({learningSummary.topPlace}/{learningSummary.total})</span></div></div><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">印の3着内捕捉率</div><div className="font-black">{learningSummary.totalTop3 ? Math.round(learningSummary.markedTop3/learningSummary.totalTop3*100) : 0}% <span className="text-[9px] text-gray-400">({learningSummary.markedTop3}/{learningSummary.totalTop3})</span></div></div></div>
+        <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs"><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">◎勝率</div><div className="font-black">{learningSummary.topTotal ? Math.round(learningSummary.topWin/learningSummary.topTotal*100) : 0}% <span className="text-[9px] text-gray-400">({learningSummary.topWin}/{learningSummary.topTotal})</span></div></div><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">◎複勝率</div><div className="font-black">{learningSummary.topTotal ? Math.round(learningSummary.topPlace/learningSummary.topTotal*100) : 0}% <span className="text-[9px] text-gray-400">({learningSummary.topPlace}/{learningSummary.topTotal})</span></div></div><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">印の3着内捕捉率</div><div className="font-black">{learningSummary.totalTop3 ? Math.round(learningSummary.markedTop3/learningSummary.totalTop3*100) : 0}% <span className="text-[9px] text-gray-400">({learningSummary.markedTop3}/{learningSummary.totalTop3})</span></div></div></div>
         <div className="mt-2 flex flex-wrap items-center gap-2"><button onClick={relearnAllCompleted} className="rounded bg-violet-700 px-3 py-1.5 text-[10px] font-black text-white">既存結果から全再学習</button><span className="text-[10px] text-gray-500">1〜3着だけで、上位3頭とその他を比較。差が小さい項目は動かしません。</span></div>
         {learningHistory.length>0 && <div className="mt-2 rounded bg-violet-50 p-2 text-[10px] text-violet-900"><div className="font-black">直近の学習変更</div><div className="mt-1">{Object.entries(learningHistory[0].changes||{}).map(([k,v]:any)=>`${k} ${v>0?"+":""}${Number(v).toFixed(3)}`).join(" / ") || "変更なし"}</div></div>}
         <div className="mt-2 flex flex-wrap gap-1 text-[10px] text-gray-600">{Object.entries(learned).map(([k,v])=><span key={k} className="rounded bg-gray-100 px-2 py-1">{k}: {Number(v).toFixed(2)}</span>)}</div>
@@ -3210,7 +3214,7 @@ export default function JRAPredictionTool() {
           <div className="grid grid-cols-2 gap-2">{missAnalysis.factors.slice(0,8).map((f:any)=><div key={f.label} className="rounded border border-gray-200 bg-white p-2 text-xs"><div className="font-black">{f.label}</div><div className={f.avgDiff>0?'text-rose-600':'text-blue-600'}>勝ち馬との差 {f.avgDiff>0?'+':''}{f.avgDiff.toFixed(1)}</div><div className="text-[10px] text-gray-500">勝ち馬が上 {Math.round(f.rate*100)}% / {f.n}R</div></div>)}</div>
           <div className="text-[10px] text-gray-500">※ 原因の断定ではなく、◎と実際の勝ち馬のズレを診断する画面です。</div>
         </div>}
-        {analysisTab==='backtest' && <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4"><div className="rounded bg-indigo-50 p-3"><div>対象</div><b>{backtest.races}R</b></div><div className="rounded bg-indigo-50 p-3"><div>◎勝率</div><b>{backtest.races?Math.round(backtest.win/backtest.races*100):0}%</b></div><div className="rounded bg-indigo-50 p-3"><div>◎複勝率</div><b>{backtest.races?Math.round(backtest.place/backtest.races*100):0}%</b></div><div className="rounded bg-indigo-50 p-3"><div>印の3着内捕捉</div><b>{backtest.races?Math.round(backtest.top3Capture/(backtest.races*3)*100):0}%</b></div></div>}
+        {analysisTab==='backtest' && <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4"><div className="rounded bg-indigo-50 p-3"><div>対象</div><b>{backtest.races}R（◎あり{backtest.topRaces}R）</b></div><div className="rounded bg-indigo-50 p-3"><div>◎勝率</div><b>{backtest.topRaces?Math.round(backtest.win/backtest.topRaces*100):0}%</b></div><div className="rounded bg-indigo-50 p-3"><div>◎複勝率</div><b>{backtest.topRaces?Math.round(backtest.place/backtest.topRaces*100):0}%</b></div><div className="rounded bg-indigo-50 p-3"><div>印の3着内捕捉</div><b>{backtest.races?Math.round(backtest.top3Capture/(backtest.races*3)*100):0}%</b></div></div>}
       </div>
 
       {resultEntryMode && (
@@ -3274,7 +3278,7 @@ export default function JRAPredictionTool() {
                     <div>購入額の記録がないため回収率は計算しません。</div>
                   </details>}
                   {race.integrity?.quarantined && <div className="mt-2 text-xs text-red-500">要確認・学習と成績から除外：{race.integrity.issues.join("／")}</div>}
-                  <div className="mt-1 text-xs text-slate-500">{race.predictionSnapshot?.provenance==='prospective'?'発走前の固定予想':'事前予想の検証対象外'}・◎ {predictionOrder(race)[0]?.umaban||'-'}</div>
+                  <div className="mt-1 text-xs text-slate-500">{race.predictionSnapshot?.provenance==='prospective'?'発走前の固定予想':'事前予想の検証対象外'}・◎ {predictionFavorite(race)?.umaban||'なし'}</div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button onClick={() => loadSavedRace(race, false)} className="rounded bg-slate-100 px-3 py-1.5 text-[11px] font-bold text-slate-700">保存予想・参考再評価</button>
                     <button onClick={() => loadSavedRace(race, true)} className="rounded bg-purple-700 px-3 py-1.5 text-[11px] font-bold text-white">{race.status === "completed" ? "結果を修正" : "結果を入力"}</button>
@@ -3323,3 +3327,4 @@ export default function JRAPredictionTool() {
     </div>
   );
 }
+
