@@ -894,12 +894,10 @@ export default function JRAPredictionTool() {
       h.umaban = head.umaban; h.name = head.name; h.detailImported = true;
 
       // 「差中1週」「先中2週」「逃中7週」から公式表示の脚質を最優先で採用。
-      // 「差連闘」「先休養明け」など、中N週以外の表記でも脚質だけは取得する(休養週は数値のときのみ設定)。
-      const STYLE_LINE_RE = /^(逃|先|差|追)(?:中(\d+)週|連闘|休養\S*)$/;
-      const styleLine = block.find((x)=>STYLE_LINE_RE.test(x));
+      const styleLine = block.find((x)=>/^(逃|先|差|追)中\d+週$/.test(x));
       if (styleLine) {
-        const m = styleLine.match(STYLE_LINE_RE);
-        if (m) { h.runningStyle=m[1]; h.styleSource="詳細出馬表"; if (m[2]) h.restWeeks=m[2]; }
+        const m = styleLine.match(/^(逃|先|差|追)中(\d+)週$/);
+        if (m) { h.runningStyle=m[1]; h.styleSource="詳細出馬表"; h.restWeeks=m[2]; }
       }
 
       // 馬体重と増減。
