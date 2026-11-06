@@ -110,7 +110,7 @@ export function parseCollectedPages(pages, acquiredAt=new Date().toISOString()){
   for(let i=0;i<heads.length;i++){
     const m=heads[i],h=horses.find(h=>h.umaban===m[1]);if(!h||nameKey(h.name)!==nameKey(m[2]))throw Error('詳細の馬番・馬名が不一致');
     const b=details.slice(m.index,i+1<heads.length?heads[i+1].index:details.length);
-    const style=b.match(/\n(逃|先|差|追)\n中(\d+)週/);if(style){h.runningStyle=style[1];h.restWeeks=style[2];h.styleSource='詳細出馬表';}
+    const style=b.match(/\n(逃|先|差|追)\n(?:中(\d+)週|連闘|休養[^\n]*)/);if(style){h.runningStyle=style[1];if(style[2])h.restWeeks=style[2];h.styleSource='詳細出馬表';}
     h.detailImported=true;
     for(const [key,prefix]of [['detailDistanceFit',`全場${surface==='芝'?'芝':'ダ'}${distance}m`],['detailCourseFit',`${track}${surface==='芝'?'芝':'ダ'}${distance}m`]]){
       const z=b.match(new RegExp(`(?:^|\\n)${prefix}\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)`));if(z)h[key]=fit(+z[1],+z[2],+z[3],+z[4]);
