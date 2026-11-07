@@ -50,11 +50,19 @@ export const actualHorses = race => resultNumbers(race).map((n,i)=>({...((race.h
 export const rosterKey = race => `${race.track}|${race.surface}|${race.distance}|${(race.horses||[]).map(h=>`${h.umaban}:${h.name}`).sort().join('|')}`;
 export const eventKey = race => race.raceDate && race.raceNumber ? `${race.raceDate}|${race.track}|${race.raceNumber}`:null;
 const clone=x=>JSON.parse(JSON.stringify(x));
-export const freezePrediction = (race,provenance=(race.scheduledStart && Date.parse(race.scheduledStart)>Date.now()?'prospective':'fixed-unverified')) => ({
-  modelVersion:MODEL_VERSION, provenance, capturedAt:(provenance==='legacy-unverified'?race.savedAt:race.updatedAt)||race.savedAt||new Date().toISOString(),
-  learned:clone(race.learnedSnapshot||{}), settings:{weights:race.weights,oddsOn:race.oddsOn,paceType:race.paceType,experimentalOn:!!race.experimentalOn},
-  horses:(race.horses||[]).map(h=>{const v=clone(h);delete v.finish;return v;}),
-});
+export const freezePrediction = (race,provenance=(race.scheduledStart && Date.parse(race.scheduledStart)>Date.now()?'prospective':'fixed-unverified')) => {
+  const snapshot={
+    modelVersion:MODEL_VERSION, provenance, capturedAt:(provenance==='legacy-unverified'?race.savedAt:race.updatedAt)||race.savedAt||new Date().toISOString(),
+    learned:clone(race.learnedSnapshot||{}), settings:{weights:race.weights,oddsOn:race.oddsOn,paceType:race.paceType,experimentalOn:!!race.experimentalOn},
+    horses:(race.horses||[]).map(h=>{const v=clone(h);delete v.finish;return v;}),
+  };
+  // 予想保存時の信頼度を予想と一緒に固定する（検証用の記録。予想の計算・点数・印には影響しない）。
+  // 旧記録(legacy-unverified)には現在の値を埋めない。値がない記録は「当時の記録なし」として扱う。
+  if(provenance!=='legacy-unverified' && race.confidenceSnapshot) snapshot.confidenceSnapshot=clone(race.confidenceSnapshot);
+  return snapshot;
+};
+// 予想保存時に固定した信頼度。記録がなければ null（現在の confidenceSnapshot では代用しない）。
+export const frozenConfidence = race => race.predictionSnapshot?.confidenceSnapshot ?? null;
 export const migrateRaces = input => {
   const list=input.map(r=>{
     const legacy=!r.predictionSnapshot;
