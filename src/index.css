@@ -47,3 +47,120 @@ body { background: #050b16; color: #e5edf7; }
 .dark-app .bg-sky-100 { background-color: rgba(14,116,144,.22) !important; }
 .dark-app .bg-violet-100 { background-color: rgba(109,40,217,.22) !important; }
 .dark-app .bg-rose-100 { background-color: rgba(190,24,93,.22) !important; }
+
+/* Page navigation: each task has its own screen; input state lives above panels. */
+.dark-app { padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px)); overflow-x: clip; }
+.app-header { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; min-height: 56px; padding: 10px 16px; background: #07111ff5; border-bottom: 1px solid #334155; backdrop-filter: blur(16px); }
+.app-brand { font-size: 16px; font-weight: 800; letter-spacing: .02em; }
+.app-header-meta { font-size: 11px; color: #a9bdd5; }
+.app-status { width: 100%; font-size: 12px; color: #a7f3d0; overflow-wrap: anywhere; }
+.app-page { max-width: 880px; margin: 0 auto; padding-bottom: 24px; min-width: 0; outline: none; }
+.app-page-heading { margin: 20px 16px 16px; }
+.app-page-heading h1 { font-size: 24px; line-height: 1.4; font-weight: 800; color: #f8fafc; }
+.app-page-heading p { margin-top: 6px; font-size: 13px; color: #b7c7da; line-height: 1.7; }
+.app-race-context { max-width: 856px; margin: 12px auto 0; padding: 0 16px; display: flex; flex-wrap: wrap; gap: 3px 10px; font-size: 12px; color: #b9c9de; }
+.app-race-context strong { flex-basis: 100%; font-size: 15px; color: #eef5ff; overflow-wrap: anywhere; }
+.app-bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; z-index: 50; padding-bottom: env(safe-area-inset-bottom, 0px); background: #0c1628fa; border-top: 1px solid #3a4e69; backdrop-filter: blur(18px); }
+.app-tabs { max-width: 880px; margin: 0 auto; display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 4px; padding: 7px 8px; }
+.dark-app .app-tab { min-width: 0; min-height: 58px; border-radius: 12px; border: 1px solid transparent; color: #bbcbe0; font-size: 11px; font-weight: 700; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; background: transparent; }
+.dark-app .app-tab-active { color: #ffffff; background: #1d4ed8; border-color: #739ffb; }
+.app-tab-icon { display: block; font-size: 23px; line-height: 1.15; }
+.app-tab:focus-visible, .app-action:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
+.app-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.dark-app .app-action { min-height: 44px; border: 1px solid #53667f; border-radius: 10px; padding: 10px 14px; color: #e7f0ff; background: #17263d; font-size: 13px; font-weight: 700; }
+.dark-app .app-action-primary { background: #047857; border-color: #34d399; color: #fff; }
+.app-action:disabled { opacity: .45; }
+.app-empty, .app-result-overview { border: 1px solid #405a7a; border-radius: 16px; padding: 18px; background: #101f35; }
+.app-empty h2, .app-result-overview h2 { font-size: 16px; font-weight: 800; color: #f8fafc; }
+.app-empty p, .app-result-overview p { font-size: 12px; color: #b9c9de; line-height: 1.8; margin: 10px 0; }
+.app-stat-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; margin-top: 14px; }
+.app-stat-grid > div { border-radius: 12px; padding: 14px 10px; background: #182c48; }
+.app-stat-grid span { display: block; font-size: 11px; color: #c2d3e8; }
+.app-stat-grid strong { font-size: 26px; color: #fff; }
+.app-stat-grid small { font-size: 12px; }
+/* Existing light-theme accent classes need legible foregrounds on dark cards. */
+.dark-app [class*="text-emerald-"], .dark-app [class*="text-green-" ] { color: #6ee7b7 !important; }
+.dark-app [class*="text-blue-"], .dark-app [class*="text-sky-"] { color: #93c5fd !important; }
+.dark-app [class*="text-indigo-"], .dark-app [class*="text-violet-"] { color: #c4b5fd !important; }
+.dark-app [class*="text-amber-"] { color: #fcd34d !important; }
+.dark-app [class*="text-red-"], .dark-app [class*="text-rose-"] { color: #fda4af !important; }
+.dark-app .text-gray-400, .dark-app .text-slate-400 { color: #a3b5ce !important; }
+.dark-app .app-page button:not(.app-action) { min-height: 40px; }
+.dark-app .app-page table button { min-height: 32px; }
+.dark-app #buy-decision { margin-top: 16px; }
+.dark-app .app-page [class*="text-[10px]"], .dark-app .app-page [class*="text-[9px]"] { font-size: 11px; line-height: 1.65; }
+@media(max-width: 480px) {
+  .app-header-meta { display: none; }
+  .app-page-heading { margin-top: 16px; }
+  .app-actions .app-action { flex: 1 1 calc(50% - 8px); }
+  .dark-app .app-page input:not([type="checkbox"]):not([type="range"]), .dark-app .app-page select, .dark-app .app-page textarea { font-size: 16px; }
+  .dark-app .app-page table input, .dark-app .app-page table select { font-size: 14px !important; }
+}
+
+.app-shell { padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px)); overflow-x: clip; }
+.app-theme-toggle { margin-left: auto; border: 1px solid #61728c; border-radius: 8px; padding: 7px 10px; font-size: 12px; min-height: 36px; color: #e2e8f0; }
+.app-race-picker, .app-archive-filters { border: 1px solid #455976; border-radius: 12px; padding: 12px; background: #101f35; font-size: 13px; }
+.app-race-picker label { font-weight: 700; display: block; margin-bottom: 8px; }
+.app-race-picker > div { display: flex; gap: 8px; }
+.app-race-picker select { min-width: 0; flex: 1; padding: 10px; border-radius: 8px; }
+.app-archive-filters { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.app-archive-filters select { display: block; width: 100%; min-height: 44px; margin-top: 6px; border-radius: 8px; padding: 8px; }
+.app-archive-filters p { grid-column: 1/-1; font-size: 12px; }
+.app-flow-details { border: 1px solid #607698; border-radius: 12px; }
+.app-flow-details > summary { padding: 15px; font-size: 14px; font-weight: 700; cursor: pointer; }
+.light-app { background: #f6f3ec; color: #212936; }
+.light-app .app-header { background: #fffdf8f5; border-color: #d6d0c5; }
+.light-app .app-brand { color: #192331; }
+.light-app .app-header-meta, .light-app .app-page-heading p, .light-app .app-race-context { color: #596474; }
+.light-app .app-page-heading h1, .light-app .app-race-context strong { color: #192331; }
+.light-app .app-status { color: #096445; }
+.light-app .app-theme-toggle { color: #354154; border-color: #c5c5c0; background: #fff; }
+.light-app .app-bottom-nav { background: #fffdf8fa; border-color: #cbc6bc; }
+.light-app .app-tab { min-width: 0; min-height: 58px; border-radius: 12px; border: 1px solid transparent; color: #4c5868; font-size: 11px; font-weight: 700; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; background: transparent; }
+.light-app .app-tab-active { color: #fff; background: #1e4573; border-color: #1e4573; }
+.light-app .app-action { min-height: 44px; border: 1px solid #c5cbd3; border-radius: 10px; padding: 10px 14px; color: #24354b; background: #fff; font-size: 13px; font-weight: 700; }
+.light-app .app-action-primary { background: #146b51; border-color: #146b51; color: #fff; }
+.light-app .app-empty, .light-app .app-result-overview, .light-app .app-race-picker, .light-app .app-archive-filters { background: #fffdf9; border-color: #d6d0c5; }
+.light-app .app-empty h2, .light-app .app-result-overview h2 { color: #1e293b; }
+.light-app .app-empty p, .light-app .app-result-overview p { color: #526174; }
+.light-app .app-stat-grid > div { background: #edf2f7; }
+.light-app .app-stat-grid span { color: #526174; }
+.light-app .app-stat-grid strong { color: #183c63; }
+.light-app .app-flow-details { background: #fffdf9; border-color: #d6d0c5; }
+.light-app .bg-white { background: #fffdf9; }
+.light-app .text-gray-400, .light-app .text-slate-400 { color: #626f7e; }
+.light-app .text-gray-500, .light-app .text-slate-500 { color: #566475; }
+.light-app .border-gray-100, .light-app .border-gray-200, .light-app .border-gray-300, .light-app .border-slate-200 { border-color: #d5d9de; }
+.light-app input:not([type="range"]):not([type="checkbox"]), .light-app select, .light-app textarea { color: #1f2b3b; background: #fff; border-color: #b9c3cf; }
+.light-app .bg-slate-950, .light-app [class*="bg-slate-900/"], .light-app [class*="bg-slate-950/"] { background: #f0f3f7; color: #26364b; }
+.light-app #race-flow .text-slate-100, .light-app #race-flow .text-slate-200 { color: #24354b; }
+.light-app #race-flow .text-cyan-300, .light-app #race-flow .text-cyan-200 { color: #075b71; }
+.light-app #race-flow .text-emerald-300 { color: #086448; }
+.light-app #race-flow .text-rose-300 { color: #ad254b; }
+.light-app .app-page button:not(.app-action) { min-height: 40px; }
+.light-app .app-page table button { min-height: 32px; }
+.light-app .app-page [class*="text-[10px]"], .light-app .app-page [class*="text-[9px]"] { font-size: 11px; line-height: 1.65; }
+.app-page table { font-variant-numeric: tabular-nums; }
+@media(max-width:480px) {
+  .light-app .app-page input:not([type="checkbox"]):not([type="range"]), .light-app .app-page select, .light-app .app-page textarea { font-size: 16px; }
+  .light-app .app-page table input, .light-app .app-page table select { font-size: 14px; }
+}
+/* Grid children must shrink so wide tables scroll inside the card on phones. */
+#marked-summary > div { min-width: 0; }
+.light-app #race-flow { background: #0f172a; color: #e2e8f0; }
+.light-app #race-flow [class*="bg-slate-"] { background-color: #111c2f; color: #e2e8f0; }
+.light-app #race-flow .text-slate-100, .light-app #race-flow .text-slate-200 { color: #e2e8f0; }
+.light-app #race-flow .text-slate-400 { color: #a7b9cf; }
+.light-app #race-flow .text-cyan-200, .light-app #race-flow .text-cyan-300 { color: #67e8f9; }
+.light-app #race-flow .text-emerald-300 { color: #6ee7b7; }
+.light-app #race-flow .text-rose-300 { color: #fda4af; }
+.light-app button[class*="bg-indigo-700"], .light-app button[class*="bg-purple-700"], .light-app button[class*="bg-violet-700"], .light-app button[class*="bg-emerald-700"], .light-app button[class*="bg-slate-800"] { color: #fff; }
+@media(max-width:480px) {
+  #marked-summary table { min-width: 0; table-layout: fixed; font-size: 13px; }
+  #marked-summary table th:nth-child(n+5), #marked-summary table td:nth-child(n+5) { display: none; }
+  #marked-summary table th:nth-child(1) { width: 12%; }
+  #marked-summary table th:nth-child(2) { width: 14%; }
+  #marked-summary table th:nth-child(3) { width: 54%; }
+  #marked-summary table th:nth-child(4) { width: 20%; }
+  #marked-summary table td:nth-child(3) { overflow-wrap: anywhere; }
+}

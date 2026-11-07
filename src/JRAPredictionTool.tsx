@@ -302,6 +302,21 @@ export default function JRAPredictionTool() {
   const [resultEntryMode, setResultEntryMode] = useState(false);
   const [activeSavedRaceId, setActiveSavedRaceId] = useState<string | null>(null);
   const [reviewRaceId, setReviewRaceId] = useState<string | null>(null);
+  const APP_PAGES = [
+    {id:"input",label:"入力",icon:"＋"},
+    {id:"prediction",label:"AI予想",icon:"✦"},
+    {id:"results",label:"成績",icon:"▥"},
+    {id:"saved",label:"保存レース",icon:"▤"},
+    {id:"settings",label:"設定",icon:"⚙"},
+  ] as const;
+  type AppPage = typeof APP_PAGES[number]["id"];
+  const [appPage,setAppPage]=useState<AppPage>("input");
+  const [nightMode,setNightMode]=useState(()=>{try{return localStorage.getItem("jra-display-theme")==="night";}catch{return false;}});
+  const [archiveDate,setArchiveDate]=useState("");
+  const [archiveTrack,setArchiveTrack]=useState("");
+  useEffect(()=>{try{localStorage.setItem("jra-display-theme",nightMode?"night":"day");}catch{}},[nightMode]);
+  const openPage=(page:AppPage)=>{setAppPage(page);window.scrollTo({top:0,behavior:"instant"});};
+  useEffect(()=>{if(savedRacesOpen){setAppPage("saved");window.scrollTo({top:0,behavior:"instant"});}},[savedRacesOpen]);
   const [analysisTab, setAnalysisTab] = useState<"review"|"conditions"|"backtest"|"misses">("review");
   const [resultOrderInput, setResultOrderInput] = useState("");
   const [learningHistory, setLearningHistory] = useState<any[]>([]);
@@ -2582,6 +2597,7 @@ export default function JRAPredictionTool() {
     setHorses((race.horses || []).map((h) => ({ ...sanitizeHorseRecord(h), finish: h.finish || "" })));
     setActiveSavedRaceId(race.id);
     setResultEntryMode(forResult);
+    setAppPage(forResult?"results":"prediction");
     if (forResult) {
       const existingOrder=(race.horses||[]).filter((h:any)=>{const f=num(h.finish); return f!==null&&f>=1&&f<=3;}).sort((a:any,b:any)=>num(a.finish)-num(b.finish)).map((h:any)=>h.umaban).join("-");
       setResultOrderInput(existingOrder);
@@ -2679,50 +2695,28 @@ export default function JRAPredictionTool() {
   const setW = (key, val) => setWeights((w) => ({ ...w, [key]: Number(val) }));
 
   const scrollToSection = (id: string) => {
-    setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }), 30);
+    const destination:AppPage = ["buy-decision","marked-summary","race-flow"].includes(id)?"prediction":"input";
+    setAppPage(destination);
+    setTimeout(() => {const element=document.getElementById(id);const details=element?.closest("details");if(details)details.open=true;element?.scrollIntoView({ behavior: "smooth", block: "start" });}, 30);
   };
 
   const colHeaderCls = "px-2 py-2 text-xs font-bold text-gray-600 whitespace-nowrap border-b border-gray-300";
   const cellBase = "px-2 py-1.5 text-sm text-center border-b border-gray-100 whitespace-nowrap";
 
   return (
-    <div className="dark-app min-h-screen bg-slate-950 text-slate-100 pb-16">
-      {/* ヘッダー */}
-      <div className="bg-gray-900 text-white px-3 py-3 flex items-center justify-between sticky top-0 z-20">
-        <div className="flex items-center gap-2">
-          <span className="text-base sm:text-lg font-black tracking-wide whitespace-nowrap">JRA タイム指数予想帳</span>
-          <span className="text-xs bg-gray-700 px-1.5 py-0.5 rounded">中央競馬対応版</span>
-        </div>
-        {status && <span className="text-xs bg-green-600 px-2 py-1 rounded">{status}</span>}
-      </div>
-
-      <div className="sticky top-[52px] z-10 border-b border-gray-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
-        <div className="mx-auto flex max-w-5xl gap-2 overflow-x-auto">
-          <button onClick={()=>scrollToSection("race-info")} className="shrink-0 rounded-full bg-gray-100 px-3 py-1.5 text-[11px] font-black text-gray-700">① レース</button>
-          <button onClick={()=>scrollToSection("bulk-input")} className="shrink-0 rounded-full bg-emerald-100 px-3 py-1.5 text-[11px] font-black text-emerald-800">② 入力</button>
-          <button onClick={()=>scrollToSection("horse-evaluation")} className="shrink-0 rounded-full bg-blue-100 px-3 py-1.5 text-[11px] font-black text-blue-800">③ 全頭評価</button>
-          <button onClick={()=>scrollToSection("buy-decision")} className="shrink-0 rounded-full bg-emerald-100 px-3 py-1.5 text-[11px] font-black text-emerald-800">④ AI買い判定</button>
-          <button onClick={()=>scrollToSection("marked-summary")} className="shrink-0 rounded-full bg-indigo-100 px-3 py-1.5 text-[11px] font-black text-indigo-800">⑤ 印・買い目</button>
-          <button onClick={()=>scrollToSection("race-flow")} className="shrink-0 rounded-full bg-violet-950/80 px-3 py-1.5 text-[11px] font-black text-violet-200 border border-violet-700">⑥ 展開</button>
-        </div>
-      </div>
-
-      {isDeploymentUrl && (
+    <div className={`${nightMode?"dark-app":"light-app"} min-h-screen app-shell pb-16`}>
+<header className="app-header"><div className="app-brand">JRA タイム指数予想帳</div><div className="app-header-meta">中央競馬対応版</div><button type="button" className="app-theme-toggle" onClick={()=>setNightMode(v=>!v)} aria-label={nightMode?"昼表示に切り替え":"夜表示に切り替え"}>{nightMode?"☀ 昼表示":"☾ 夜表示"}</button>{status && <div role="status" className="app-status">{status}</div>}</header>
+{isDeploymentUrl && (
         <div className="mx-3 mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs leading-relaxed text-amber-900">
           <div className="font-black">⚠ このURLはDeployment固有URLです</div>
           <div className="mt-1">保存データはURLごとに別になります。普段は固定のProductionドメインから開いてください。古いDeploymentのデータは、その古いURLを開いて「全データ保存」→固定URLで「全データ読込」で移せます。</div>
         </div>
       )}
-
-      <div className="mx-3 mt-3 rounded-lg border border-slate-600 p-3 text-xs">
-        v3.13.4-fix1 ／ 事前固定の検証 {integrityStats.prospective.n}件（◎あり{integrityStats.prospective.topN}件）・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
-        <label className="mt-2 mb-2 flex gap-2"><input type="checkbox" checked={experimentalOn} onChange={e=>setExperimentalOn(e.target.checked)} />新しい評価方式を検証する（指数不足の補助評価・固定頭数。過去比較で優位性未確認）</label>
-        <div className="mt-1">旧記録の予想は保存値を保持します。修正後の再予想を過去の的中実績には加えません。発走日時未入力の新規記録も事前検証とは分けます。</div>
-      </div>
-      {activeSavedRaceId && (()=>{const r=savedRaces.find(x=>x.id===activeSavedRaceId);return r?<div className="mx-3 mt-3 rounded-lg border border-indigo-500 p-3 text-xs"><div className="font-bold">保存した予想（回顧・成績の基準）</div><div className="mt-1">{predictionOrder(r).filter(h=>h.mark).map(h=>`${h.mark}${h.umaban} ${h.name}`).join(" ／ ")}</div><div className="mt-1">以下の全頭評価は現行方式による参考再評価です。結果登録で保存予想を上書きしません。</div><button onClick={correctRaceIdentity} className="mt-2 rounded bg-indigo-700 p-2">入力中の開催日・Rで開催情報を訂正</button></div>:null;})()}
-      {bulkSaving&&<div role="dialog" aria-modal="true" aria-label="一括保存中" className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/90 text-white"><div role="status">全レースの予想を保存しています。画面を閉じずにお待ちください。</div></div>}
-      {horses.some(h=>Object.keys(h._rawRepairs||{}).some(k=>!k.startsWith('_'))) && <div className="mx-3 mt-3 text-xs text-amber-500">数値欄に文字混入があった馬があります。該当値は評価から外しました。出馬表・指数表を確認して再入力してください。</div>}
-      <div className="mx-3 mt-3 rounded-lg border border-emerald-700 p-3 text-xs">
+{bulkSaving&&<div role="dialog" aria-modal="true" aria-label="一括保存中" className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/90 text-white"><div role="status">全レースの予想を保存しています。画面を閉じずにお待ちください。</div></div>}
+{(raceName || horses.length>0) && <div className="app-race-context"><span>{raceDate || "開催日未入力"} · {track}{raceNumber ? " "+raceNumber+"R" : ""}</span><strong>{raceName || "レース名未入力"}</strong><span>{surface}{distance}m · {horses.length}頭</span></div>}
+{appPage==="input" && <main id="page-input" role="tabpanel" aria-labelledby="tab-input" className="app-page" tabIndex={-1}>
+<div className="app-page-heading"><h1>予想データを入力</h1><p>ファイルの読み込み・レース選択・出走馬の編集</p></div>
+<div className="mx-3 mt-3 rounded-lg border border-emerald-700 p-3 text-xs">
         <button disabled={bulkSaving} onClick={importAutoSource} className="rounded bg-emerald-700 px-3 py-2 font-bold">取得データを読み込む</button>
         <div className="mt-2">まとめて取得したJSONを1回読み込み、レースを選んで使えます。過去の予想・結果は保持します。</div>
         {sourceCollection.length>0&&<div className="mt-3 flex flex-wrap gap-2">
@@ -2739,19 +2733,9 @@ export default function JRAPredictionTool() {
         </div>}
         {sourceMessage&&<div role="status" className="mt-3 whitespace-pre-wrap">{sourceMessage}</div>}
       </div>
-      <div className="mx-3 mt-3 rounded-lg border border-purple-600 p-3 text-xs">
-        <button onClick={importResultFile} className="rounded bg-purple-700 px-3 py-2 font-bold">結果ファイルを読み込む</button>
-        <div className="mt-2">開催日・競馬場・Rと全頭の馬番・馬名を照合します。保存した予想を保持して着順・払戻を反映し、回顧と学習を更新します。</div>
-        {resultImportPlan&&<div className="mt-3">
-          <div className="font-bold">反映可能 {resultImportPlan.updated}件 ／ 反映済み {resultImportPlan.report.filter(r=>r.status==='same').length}件 ／ 要確認 {resultImportPlan.report.filter(r=>r.status==='skip').length}件</div>
-          <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto">{resultImportPlan.report.map((r,i)=><li key={i} className={r.status==='skip'?'text-amber-400':''}>{r.label}：{r.reason}</li>)}</ul>
-          <button disabled={!resultImportPlan.updated} onClick={applyResultFile} className="mt-3 rounded bg-purple-700 px-3 py-2 font-bold disabled:opacity-40">結果を反映する</button>
-        </div>}
-        {resultImportMessage&&<div role="status" className="mt-3 whitespace-pre-wrap">{resultImportMessage}</div>}
-      </div>
-      {/* レース情報 */}
-      <div id="race-info" className="bg-white mx-3 mt-3 scroll-mt-24 rounded-xl shadow-sm border border-gray-200 p-3">
-        <div className="mb-2 flex items-center justify-between"><div className="text-sm font-black text-gray-800">① レース情報</div><button onClick={()=>scrollToSection("bulk-input")} className="rounded-lg bg-emerald-50 px-2.5 py-1 text-[10px] font-black text-emerald-700">入力へ ↓</button></div>
+{horses.some(h=>Object.keys(h._rawRepairs||{}).some(k=>!k.startsWith('_'))) && <div className="mx-3 mt-3 text-xs text-amber-500">数値欄に文字混入があった馬があります。該当値は評価から外しました。出馬表・指数表を確認して再入力してください。</div>}
+<div id="race-info" className="bg-white mx-3 mt-3 scroll-mt-24 rounded-xl shadow-sm border border-gray-200 p-3">
+        <div className="mb-2 flex items-center justify-between"><div className="text-sm font-black text-gray-800">レース情報</div><button onClick={()=>scrollToSection("bulk-input")} className="rounded-lg bg-emerald-50 px-2.5 py-1 text-[10px] font-black text-emerald-700">入力へ ↓</button></div>
         <div className="grid grid-cols-2 gap-2 mb-2">
           <label className="text-xs">開催日<input type="date" value={raceDate} onChange={e=>setRaceDate(e.target.value)} className="w-full border rounded p-1" /></label>
           <label className="text-xs">レース番号<input type="number" min="1" max="12" value={raceNumber} onChange={e=>setRaceNumber(e.target.value)} className="w-full border rounded p-1" /></label>
@@ -2801,9 +2785,46 @@ export default function JRAPredictionTool() {
           </label>
         )}
       </div>
-
-      {/* テキスト一括入力 */}
-      <div id="bulk-input" className="mx-3 mt-3 scroll-mt-24 overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-sm">
+<div className="app-actions mx-3 mt-3">
+<button type="button" onClick={()=>startNewRace(true)} className="app-action">＋ 新しいレース</button>
+<button type="button" onClick={addHorse} className="app-action">＋ 1頭追加</button>
+<button type="button" onClick={()=>setImportOpen(v=>!v)} className="app-action">一括貼り付け</button>
+<button type="button" onClick={doExport} className="app-action">JSON書き出し</button>
+{!resultEntryMode && <button type="button" onClick={autoCompleteCurrentHorses} className="app-action">不足項目を補完</button>}
+<button type="button" onClick={saveRaceForLater} className="app-action app-action-primary" disabled={resultEntryMode}>レースを保存</button>
+<button type="button" onClick={()=>openPage("prediction")} className="app-action">AI予想を見る →</button>
+{horses.length>0 && <button type="button" onClick={clearAll} className="app-action">入力を全削除</button>}
+</div>
+{importOpen && (
+        <div className="bg-white mx-3 mt-2 rounded-lg shadow-sm border border-gray-200 p-3">
+          <div className="text-xs text-gray-500 mb-1">
+            列順: 馬番,予想印,馬名,全体,スタート,追走,上がり,5走平均,距離,コース,3走,2走,前走,性齢,斤量,騎手。
+            「タイム指数マスター」画面のコピーをそのまま貼り付けてOK（改行が崩れても「牡4」等の性齢を目印に自動補正します。前後に余計な文章が混ざっても大丈夫です）
+          </div>
+          <textarea
+            value={bulkText}
+            onChange={(e) => setBulkText(e.target.value)}
+            rows={6}
+            className="w-full border border-gray-300 rounded p-2 text-xs font-mono"
+            placeholder="1	--	ボーンディスウェイ	101	97	96	107	97	109	102	89	96	100	牡7	56.0	丸山元気"
+          />
+          <div className="flex gap-2 mt-2">
+            <button onClick={runBulkImport} className="bg-green-600 text-white text-xs font-bold px-3 py-2 rounded">取り込む</button>
+            <button onClick={() => setImportOpen(false)} className="text-xs text-gray-500 px-3 py-2">閉じる</button>
+          </div>
+        </div>
+      )}
+{exportText && (
+        <div className="bg-white mx-3 mt-2 rounded-lg shadow-sm border border-gray-200 p-3">
+          <textarea value={exportText} onChange={(e) => setExportText(e.target.value)} rows={6} className="w-full border border-gray-300 rounded p-2 text-xs font-mono" />
+          <div className="flex gap-2 mt-2">
+            <button onClick={copyExport} className="bg-blue-700 text-white text-xs font-bold px-3 py-2 rounded">コピー</button>
+            <button onClick={doImportJson} className="bg-green-600 text-white text-xs font-bold px-3 py-2 rounded">このJSONを読み込む</button>
+            <button onClick={() => setExportText("")} className="text-xs text-gray-500 px-3 py-2">閉じる</button>
+          </div>
+        </div>
+      )}
+<div id="bulk-input" className="mx-3 mt-3 scroll-mt-24 overflow-hidden rounded-2xl border border-emerald-200 bg-white shadow-sm">
         <button onClick={()=>setScanOpen((v)=>!v)} className="flex w-full items-center justify-between bg-emerald-50 px-4 py-3 text-left">
           <div><div className="font-black text-emerald-900">📝 テキスト一括入力</div><div className="mt-0.5 text-[11px] text-emerald-700">各サイトの表示内容をコピーして、対応する欄へそのまま貼り付けます</div></div>
           <span className="text-emerald-700">{scanOpen ? "▲" : "▼"}</span>
@@ -2873,8 +2894,7 @@ export default function JRAPredictionTool() {
           <div className="mt-2 text-[10px] leading-relaxed text-gray-500">入力できない欄は空のままでOKです。「出馬表（詳細）」では、脚質・近5走通過順・当該距離/コース/道悪実績・馬体増減・騎手コンビ・休養・パドックを自動抽出します。実績指数は小標本を50へ縮め、1戦だけの好走を過大評価しません。</div>
         </div>}
       </div>
-
-      <div className="mx-3 mt-3 overflow-hidden rounded-xl border border-sky-200 bg-white shadow-sm">
+<div className="mx-3 mt-3 overflow-hidden rounded-xl border border-sky-200 bg-white shadow-sm">
         <div className="bg-sky-50 px-4 py-3">
           <div className="text-sm font-black text-sky-900">⚖️ 馬体重だけ後から反映</div>
           <div className="mt-0.5 text-[10px] text-sky-700">事前予想後、馬体重発表時に一覧を貼るだけ。増減を反映して全頭を自動再計算します。</div>
@@ -2894,188 +2914,8 @@ export default function JRAPredictionTool() {
           <div className="mt-2 text-[10px] leading-relaxed text-gray-500">出馬表をそのまま貼り付けできます。馬番と馬体重・増減だけを自動抽出し、馬名・騎手・オッズ・人気・タイム指数・調教・コメント等は上書きしません。</div>
         </div>
       </div>
-
-      <div className="mx-3 mt-3 rounded-xl border border-gray-200 bg-white p-3 shadow-sm"><div className="mb-2 text-xs font-black text-gray-700">すぐ使う操作</div><div className="flex flex-wrap gap-2">
-        <button onClick={() => { if (!horses.length || confirm("現在の作業中レースをクリアして、新しいレースを始めますか？\n※保存済みレース・学習履歴は消えません。")) startNewRace(true); }} className="bg-blue-900 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">＋ 新しいレース</button>
-        <button onClick={addHorse} className="bg-blue-700 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">＋ 1頭追加</button>
-        <button onClick={() => setImportOpen((v) => !v)} className="bg-white border border-gray-300 text-xs font-bold px-3 py-2 rounded shadow-sm">一括貼り付け</button>
-        <button onClick={doExport} className="bg-white border border-gray-300 text-xs font-bold px-3 py-2 rounded shadow-sm">JSON書き出し</button>
-        {!resultEntryMode && (
-          <button onClick={autoCompleteCurrentHorses} className="bg-slate-600 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">不足項目を補完</button>
-        )}
-        {!resultEntryMode ? (
-          <button onClick={saveRaceForLater} className="bg-emerald-600 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">レースを保存</button>
-        ) : (
-          <>
-            <button onClick={saveResultAndLearn} className="bg-purple-700 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">結果保存・学習</button>
-            <button onClick={() => setResultEntryMode(false)} className="bg-white border border-gray-300 text-xs font-bold px-3 py-2 rounded shadow-sm">結果入力を閉じる</button>
-          </>
-        )}
-        <button onClick={() => setSavedRacesOpen((v) => !v)} className="bg-slate-800 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">保存済みレース {savedRaces.length ? `(${savedRaces.length})` : ""}</button>
-        <button onClick={exportFullBackup} className="bg-indigo-700 text-white text-xs font-bold px-3 py-2 rounded shadow-sm">全データ保存</button>
-        <button onClick={importFullBackup} className="bg-white border border-indigo-300 text-indigo-700 text-xs font-bold px-3 py-2 rounded shadow-sm">全データ読込</button>
-        {horses.length > 0 && (
-          <button onClick={clearAll} className="bg-white border border-red-300 text-red-500 text-xs font-bold px-3 py-2 rounded shadow-sm ml-auto">全削除</button>
-        )}
-      </div>
-      </div>
-
-      <div className="mx-3 mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <button onClick={()=>setSettingsOpen(v=>!v)} className="flex w-full items-center justify-between px-4 py-3 text-left">
-          <div><div className="text-sm font-black text-slate-800">⚙️ 詳細設定</div><div className="text-[10px] text-slate-500">普段は閉じたままでOK。ウェイト・市場補正・学習設定</div></div>
-          <span className="text-slate-500">{settingsOpen ? "▲" : "▼"}</span>
-        </button>
-        {settingsOpen && <div className="border-t border-slate-100 pb-3">
-      {/* 4軸ウェイト設定 */}
-      <div className="bg-white mx-3 mt-3 rounded-lg shadow-sm border border-gray-200 p-3">
-        <div className="text-xs font-bold text-gray-500 mb-2">4軸ウェイト設定（合計 {wSum}）</div>
-        {[
-          ["best", "全体最高"],
-          ["avg5", "5走平均"],
-          ["dist", "距離指数"],
-          ["course", "コース指数"],
-        ].map(([key, label]) => (
-          <div key={key} className="flex items-center gap-2 mb-1">
-            <span className="text-xs w-16 text-gray-600">{label}</span>
-            <input type="range" min="0" max="60" value={weights[key]} onChange={(e) => setW(key, e.target.value)} className="flex-1" />
-            <span className="text-xs w-8 text-right font-mono">{weights[key]}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* オッズ補正 */}
-      <div className="bg-white mx-3 mt-3 rounded-lg shadow-sm border border-gray-200 p-3">
-        <label className="flex items-center gap-2 text-xs font-bold text-gray-600 mb-2">
-          <input type="checkbox" checked={oddsOn} onChange={(e) => setOddsOn(e.target.checked)} />
-          市場人気補正を有効化（低オッズを弱く加点）
-        </label>
-        {oddsOn && (
-          <div>
-            <div className="text-xs text-gray-500 mb-1">補正強度: {oddsStrength}%（推奨 6〜12）</div>
-            <input type="range" min="0" max="20" value={oddsStrength} onChange={(e) => setOddsStrength(Number(e.target.value))} className="w-full" />
-          </div>
-        )}
-      </div>
-
-      <div className="bg-white mx-3 mt-3 rounded-lg shadow-sm border border-gray-200 p-3">
-        <label className="flex items-center gap-2 text-xs font-bold text-gray-600">
-          <input type="checkbox" checked={learningOn} onChange={(e) => setLearningOn(e.target.checked)} />
-          結果学習を予想へ反映（学習済み {historyCount}レース）
-        </label>
-        <div className="text-[11px] text-gray-400 mt-1">解析後は「レースを保存」。レース終了後は「3-11-5」のように1〜3着の馬番だけ入力すると、自動回顧と学習を行います。</div>
-      </div>
-
-        </div>}
-      </div>
-
-      {buyDecision.main && (
-        <div id="buy-decision" className="mx-3 mt-3 scroll-mt-24 rounded-2xl border-2 border-emerald-300 bg-white p-4 shadow-md">
-          <div className="flex items-start justify-between gap-3">
-            <div><div className="text-[11px] font-black tracking-wide text-emerald-700">💰 AI買い判定</div><div className="mt-1 text-2xl font-black text-slate-900">{buyDecision.grade} <span className="text-base text-emerald-700">{buyDecision.label}</span></div></div>
-            <div className="rounded-xl bg-emerald-50 px-3 py-2 text-center"><div className="text-[10px] font-bold text-emerald-700">推奨</div><div className="text-lg font-black text-emerald-900">{buyDecision.ticket}</div></div>
-          </div>
-          <div className="mt-3 rounded-xl bg-slate-50 p-3">
-            <div className="text-xs font-black text-slate-800">◎ {buyDecision.main.umaban} {buyDecision.main.name || ""} <span className="font-normal text-slate-500">{buyDecision.main.ninki ? `${buyDecision.main.ninki}人気` : "人気未入力"}{buyDecision.main.odds ? ` / ${buyDecision.main.odds}倍` : ""}</span></div>
-            <div className="mt-1 text-[11px] leading-relaxed text-slate-600">{buyDecision.reason}</div>
-          </div>
-          <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
-            <div className="rounded-lg bg-indigo-50 p-2"><div className="text-[10px] text-indigo-600">同版・同方式の事前固定記録</div><div className="mt-0.5 font-black text-indigo-900">勝率 {buyDecision.historyN ? buyDecision.historyWinRate.toFixed(1) : "-"}% <span className="text-[9px] font-normal">({buyDecision.historyWins}/{buyDecision.historyN})</span></div></div>
-            <div className="rounded-lg bg-amber-50 p-2"><div className="text-[10px] text-amber-700">収益性：購入・払戻記録が必要</div><div className="mt-0.5 font-black text-amber-900">{buyDecision.minOdds!==null ? `${buyDecision.minOdds.toFixed(1)}倍〜` : "未検証"} <span className="text-[9px] font-normal">{buyDecision.breakEven!==null ? `/ ${buyDecision.breakEven.toFixed(1)}%` : ""}</span></div></div>
-          </div>
-          <div className="mt-2 text-[10px] leading-relaxed text-gray-400">※過去成績は保存済み結果から自動集計。払戻データを使った回収率保証ではありません。3連系は相手抜けが残るため通常は推奨しません。</div>
-        </div>
-      )}
-
-      {/* 注目馬・波乱度・学習状況 */}
-      {raceAnalytics.marked.length > 0 && (
-        <div id="marked-summary" className="mx-3 mt-3 scroll-mt-24 grid gap-3 lg:grid-cols-3">
-          <div className="rounded-xl border border-indigo-200 bg-white p-3 shadow-sm lg:col-span-2">
-            <div className="mb-2 flex items-center justify-between"><div className="font-black text-indigo-900">🎯 印を付けた注目馬</div><div className="text-[10px] text-gray-400">印順</div></div>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[680px] text-xs"><thead><tr className="bg-indigo-50 text-indigo-800"><th className="p-2">印</th><th>馬番</th><th className="text-left">馬名</th><th>総合</th><th>調教</th><th>コメント</th><th>人気</th><th>オッズ</th><th>期待値</th></tr></thead>
-              <tbody>{raceAnalytics.marked.map((h)=><tr key={`marked-${h.id}`} className="border-t border-gray-100"><td className="p-2 text-center text-lg font-black">{h._displayMark}</td><td className="text-center font-bold">{h.umaban}</td><td className="font-bold">{h.name}<span className="ml-1 text-[9px] text-amber-600">{h._evaluationStatus!=="指数評価"?h._evaluationStatus:""}</span></td><td className="text-center font-black">{(h._selectionScore ?? h._finalScore)?.toFixed(1) ?? "-"}</td><td className="text-center">{h._trainingScore ?? "-"}</td><td className="text-center">{h._commentScore ?? "-"}</td><td className="text-center">{h.ninki || "-"}</td><td className="text-center">{h.odds || "-"}</td><td className="text-center font-bold">{h._valueScore}</td></tr>)}</tbody></table>
-            </div>
-          </div>
-          <div className="rounded-xl border border-rose-200 bg-white p-3 shadow-sm">
-            <div className="font-black text-rose-900">🌊 波乱度</div>
-            <div className="mt-1 flex items-end gap-2"><span className="text-4xl font-black text-rose-600">{raceAnalytics.chaos}</span><span className="pb-1 text-lg font-black">{raceAnalytics.label}</span></div>
-            <div className="mt-2 h-2 overflow-hidden rounded bg-gray-100"><div className="h-full bg-rose-500" style={{width:`${raceAnalytics.chaos}%`}} /></div>
-            <div className="mt-2 space-y-1 text-[11px] text-gray-600">{raceAnalytics.reasons.slice(0,4).map((r)=><div key={r}>・{r}</div>)}</div>
-            {raceAnalytics.bets.length > 0 && <div className="mt-3 rounded-lg bg-amber-50 p-2"><div className="text-[11px] font-black text-amber-900">参考買い目</div>{raceAnalytics.bets.map((b)=><div key={b} className="mt-1 text-xs font-bold text-amber-800">{b}</div>)}</div>}
-          </div>
-        </div>
-      )}
-
-      {/* AI展開予想図：印とは独立した展開エンジン */}
-      {flowPrediction && (
-        <div id="race-flow" className="mx-3 mt-3 scroll-mt-24 rounded-2xl border border-violet-800/70 bg-slate-900/95 p-4 shadow-xl shadow-violet-950/20">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="text-[11px] font-black tracking-[0.16em] text-violet-300">🏇 ORIGINAL RACE FLOW AI</div>
-              <div className="mt-1 text-xl font-black text-white">AI展開予想図</div>
-              <div className="mt-1 text-[10px] leading-relaxed text-slate-400">印予想とは別計算。脚質・通過位置・ST・追走・上がり・枠・コース・距離・馬場・騎手・調教・コメント・馬体・休養・近走を地点別に再配分します。</div>
-            </div>
-            <div className="rounded-xl border border-violet-700 bg-violet-950/60 px-4 py-2 text-center">
-              <div className="text-[10px] font-bold text-violet-300">想定ペース</div>
-              <div className="text-2xl font-black text-white">{flowPrediction.pace}</div>
-              <div className="text-[9px] text-slate-400">独自判定 {flowPrediction.autoPace}</div>
-            </div>
-          </div>
-          <div className="mt-3 flex gap-2">
-            <button onClick={()=>setFlowScenario('main')} className={`rounded-lg px-3 py-1.5 text-[11px] font-black ${flowScenario==='main'?'bg-violet-600 text-white':'border border-slate-700 bg-slate-800 text-slate-300'}`}>本線シナリオ</button>
-            <button onClick={()=>setFlowScenario('alt')} className={`rounded-lg px-3 py-1.5 text-[11px] font-black ${flowScenario==='alt'?'bg-fuchsia-600 text-white':'border border-slate-700 bg-slate-800 text-slate-300'}`}>対抗シナリオ</button>
-          </div>
-
-          <div className="mt-4 space-y-3">
-            {(flowScenario==='main'?flowPrediction.mainStages:flowPrediction.altStages).map((stage:any,stageIdx:number)=>{
-              const total=Math.max(...stage.horses.map((x:any)=>Number(x.umaban)||0),stage.horses.length);
-              return <div key={stage.label} className="overflow-hidden rounded-xl border border-slate-700 bg-[#08111f]">
-                <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
-                  <div className="font-black text-slate-100">{stage.label} <span className="ml-1 text-[10px] font-normal text-slate-500">進行方向 ←</span></div>
-                  <div className="text-[10px] text-slate-400">信頼度 <span className="font-black text-cyan-300">{stage.confidence}</span></div>
-                </div>
-                <div className="relative h-[112px] overflow-hidden bg-[linear-gradient(90deg,rgba(15,23,42,.15),rgba(30,41,59,.35)),repeating-linear-gradient(0deg,transparent,transparent_36px,rgba(148,163,184,.08)_37px)]">
-                  <div className="absolute inset-y-0 left-[6%] border-l border-dashed border-cyan-500/30" />
-                  <div className="absolute bottom-1 left-2 text-[9px] text-cyan-500/60">前</div><div className="absolute bottom-1 right-2 text-[9px] text-slate-600">後</div>
-                  {stage.horses.map((h:any,i:number)=>{
-                    const w=wakuOf(h.umaban,total)||4; const wc=WAKU_COLORS[w];
-                    const left=6+(i/Math.max(1,stage.horses.length-1))*86;
-                    const lane=((Number(h.umaban)||i)%3)*30+9;
-                    return <button key={`${stage.label}-${h.id}`} title={`${h.umaban} ${h.name}｜${flowReason(h)}`} className="absolute -translate-x-1/2 rounded-full border-2 shadow-lg transition-transform hover:scale-110" style={{left:`${left}%`,top:`${lane}px`,background:wc.bg,color:wc.text,borderColor:wc.border,width:'28px',height:'28px',fontSize:'11px',fontWeight:900}}>{h.umaban}</button>
-                  })}
-                </div>
-                <div className="flex gap-1 overflow-x-auto border-t border-slate-800 px-2 py-2">
-                  {stage.horses.slice(0,6).map((h:any,i:number)=><span key={`order-${stage.label}-${h.id}`} className="shrink-0 rounded-md bg-slate-800 px-2 py-1 text-[9px] text-slate-300"><b className="text-white">{i+1}</b> {h.umaban} {h.name}<span className="ml-1 text-[9px] text-amber-600">{h._evaluationStatus!=="指数評価"?h._evaluationStatus:""}</span></span>)}
-                </div>
-              </div>
-            })}
-          </div>
-
-          <div className="mt-4 rounded-xl border border-slate-700 bg-slate-950/70 p-3">
-            <div className="text-[11px] font-black text-violet-300">AIの読み</div>
-            <div className="mt-1 text-xs leading-relaxed text-slate-200">{flowPrediction.narrative}</div>
-          </div>
-
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-emerald-800/70 bg-emerald-950/30 p-3"><div className="text-[11px] font-black text-emerald-300">↑ 展開追い風</div><div className="mt-2 space-y-1">{flowPrediction.advantages.map((h:any)=><div key={`adv-${h.id}`} className="flex items-center justify-between text-xs"><span className="font-bold text-slate-100">{h.umaban} {h.name}<span className="ml-1 text-[9px] text-amber-600">{h._evaluationStatus!=="指数評価"?h._evaluationStatus:""}</span></span><span className="text-[10px] text-emerald-300">{flowReason(h)}</span></div>)}</div></div>
-            <div className="rounded-xl border border-rose-900/70 bg-rose-950/25 p-3"><div className="text-[11px] font-black text-rose-300">↓ 展開逆風</div><div className="mt-2 space-y-1">{flowPrediction.disadvantages.map((h:any)=><div key={`dis-${h.id}`} className="flex items-center justify-between text-xs"><span className="font-bold text-slate-100">{h.umaban} {h.name}<span className="ml-1 text-[9px] text-amber-600">{h._evaluationStatus!=="指数評価"?h._evaluationStatus:""}</span></span><span className="text-[10px] text-rose-300">前半消耗・位置取りを警戒</span></div>)}</div></div>
-          </div>
-
-          <div className="mt-3 rounded-xl border border-cyan-900/70 bg-cyan-950/20 p-3">
-            <div className="text-[11px] font-black text-cyan-300">印 × 展開の乖離チェック</div>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">{ranked.filter((h:any)=>h._autoMark).sort((a:any,b:any)=>(MARK_ORDER[a._autoMark]??9)-(MARK_ORDER[b._autoMark]??9)).slice(0,7).map((h:any)=>{
-              const fr=flowPrediction.flowRank.get(h.id)||99; const pr=h._rank||99; const diff=fr-pr;
-              const msg=diff>=3?'能力評価上位だが展開は逆風':diff<=-3?'展開恩恵が大きい': '印と展開が概ね一致';
-              return <div key={`gap-${h.id}`} className="rounded-lg bg-slate-900 px-3 py-2 text-xs"><div className="flex items-center justify-between"><span className="font-black text-white">{h._autoMark} {h.umaban} {h.name}<span className="ml-1 text-[9px] text-amber-600">{h._evaluationStatus!=="指数評価"?h._evaluationStatus:""}</span></span><span className={`text-[10px] font-bold ${diff>=3?'text-rose-300':diff<=-3?'text-emerald-300':'text-slate-400'}`}>{msg}</span></div><div className="mt-1 text-[9px] text-slate-500">総合順位 {pr}位 / 展開ゴール前 {fr}位</div></div>
-            })}</div>
-          </div>
-          <div className="mt-2 text-[9px] leading-relaxed text-slate-500">※展開図は位置取りシミュレーションで、印順位そのものではありません。人気・オッズは隊列決定には使用せず、保存時に展開スナップショットを残します。</div>
-        </div>
-      )}
-
-      {/* テーブル */}
-      <div id="horse-evaluation" className="mx-3 mt-3 scroll-mt-24">
-        <div className="mb-2 flex items-center justify-between gap-2"><div><div className="text-sm font-black text-gray-800">③ 全頭評価</div><div className="text-[10px] text-gray-500">横にスワイプして各指数を確認できます</div></div><button onClick={()=>scrollToSection("buy-decision")} className="shrink-0 rounded-lg bg-emerald-600 px-3 py-2 text-[11px] font-black text-white shadow-sm">AI買い判定へ ↑</button></div>
+<div id="horse-evaluation" className="mx-3 mt-3 scroll-mt-24">
+        <div className="mb-2 flex items-center justify-between gap-2"><div><div className="text-sm font-black text-gray-800">全頭評価・編集</div><div className="text-[10px] text-gray-500">横にスワイプして各指数を確認できます</div></div><button onClick={()=>scrollToSection("buy-decision")} className="shrink-0 rounded-lg bg-emerald-600 px-3 py-2 text-[11px] font-black text-white shadow-sm">AI予想を見る →</button></div>
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
         <table className="min-w-full border-collapse">
           <thead>
@@ -3210,27 +3050,19 @@ export default function JRAPredictionTool() {
         </table>
       </div>
       </div>
-
-
-
-      <div className="mx-3 mt-2 text-xs text-gray-400 leading-relaxed">
+<div className="mx-3 mt-2 text-xs text-gray-400 leading-relaxed">
         <div>※不足項目は「不足項目を補完」で中立値（適性50・馬体増減0）を自動入力できます。実データがある項目は上書きしません。</div>
         ※総合指数 = タイム4軸 ＋ 近走トレンド ＋ スタート/追走/上がり ＋ 展開・調教・馬場・クラス・騎手・枠・馬体重・血統・状態補正
         {surface === "芝" && agariBonus ? " ＋ 上がり補正" : ""}
         {oddsOn ? " ＋ 市場人気補正（低オッズを弱く加点・上限あり）" : ""}。
         「未」は全体最高から自動推定した参考値です。解析後は「レースを保存」、レース終了後は「保存済みレース」から結果を入力します。
       </div>
+</main>}
+{appPage==="prediction" && <main id="page-prediction" role="tabpanel" aria-labelledby="tab-prediction" className="app-page" tabIndex={-1}>
+<div className="app-page-heading"><h1>AI予想</h1><p>信頼度・注目馬・買い目・展開を確認</p></div>
+{sourceCollection.length>0 && <div className="app-race-picker mx-3 mt-3"><label htmlFor="ai-race-picker">レースを選ぶ</label><div><select id="ai-race-picker" value={sourceSelection} onChange={e=>setSourceSelection(e.target.value)}>{sourceCollection.map(b=><option key={sourceRaceKey(b)} value={sourceRaceKey(b)}>{b.race.raceDate} {b.race.track}{b.race.raceNumber}R {b.race.raceName}</option>)}</select><button type="button" className="app-action" onClick={openSelectedSource}>開く</button></div></div>}
 
-
-      <div className="mx-3 mt-3 rounded-xl border border-violet-200 bg-white p-3 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-2"><div><div className="font-black text-violet-900">🧠 自動学習</div><div className="text-[10px] text-gray-500">結果保存時に好走馬と凡走馬を比較して重みを自動調整</div></div><div className="text-sm font-black text-violet-700">{historyCount}レース学習</div></div>
-        <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs"><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">◎勝率</div><div className="font-black">{learningSummary.topTotal ? Math.round(learningSummary.topWin/learningSummary.topTotal*100) : 0}% <span className="text-[9px] text-gray-400">({learningSummary.topWin}/{learningSummary.topTotal})</span></div></div><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">◎複勝率</div><div className="font-black">{learningSummary.topTotal ? Math.round(learningSummary.topPlace/learningSummary.topTotal*100) : 0}% <span className="text-[9px] text-gray-400">({learningSummary.topPlace}/{learningSummary.topTotal})</span></div></div><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">印の3着内捕捉率</div><div className="font-black">{learningSummary.totalTop3 ? Math.round(learningSummary.markedTop3/learningSummary.totalTop3*100) : 0}% <span className="text-[9px] text-gray-400">({learningSummary.markedTop3}/{learningSummary.totalTop3})</span></div></div></div>
-        <div className="mt-2 flex flex-wrap items-center gap-2"><button onClick={relearnAllCompleted} className="rounded bg-violet-700 px-3 py-1.5 text-[10px] font-black text-white">既存結果から全再学習</button><span className="text-[10px] text-gray-500">1〜3着だけで、上位3頭とその他を比較。差が小さい項目は動かしません。</span></div>
-        {learningHistory.length>0 && <div className="mt-2 rounded bg-violet-50 p-2 text-[10px] text-violet-900"><div className="font-black">直近の学習変更</div><div className="mt-1">{Object.entries(learningHistory[0].changes||{}).map(([k,v]:any)=>`${k} ${v>0?"+":""}${Number(v).toFixed(3)}`).join(" / ") || "変更なし"}</div></div>}
-        <div className="mt-2 flex flex-wrap gap-1 text-[10px] text-gray-600">{Object.entries(learned).map(([k,v])=><span key={k} className="rounded bg-gray-100 px-2 py-1">{k}: {Number(v).toFixed(2)}</span>)}</div>
-      </div>
-
-      <div className="mx-3 mt-3 grid gap-3 md:grid-cols-2">
+<div className="mx-3 mt-3 grid gap-3 md:grid-cols-2">
         <div className="rounded-xl border border-sky-200 bg-white p-3 shadow-sm">
           <div className="flex items-center justify-between"><div className="font-black text-sky-900">🛡️ 予想信頼度</div><div className="text-2xl font-black text-sky-700">{confidence.grade} <span className="text-sm">{confidence.score}/100</span></div></div>
           <div className="mt-2 text-[11px] text-gray-600">{confidence.reasons.join("・")}</div>
@@ -3240,28 +3072,115 @@ export default function JRAPredictionTool() {
           <div className="mt-1 text-xs font-bold">{dataQuality.label}</div><div className="mt-1 text-[10px] text-gray-500">{dataQuality.issues.length?dataQuality.issues.join("・"):"主要データが揃っています"}</div>
         </div>
       </div>
-
-      <div className="mx-3 mt-3 rounded-xl border border-indigo-200 bg-white p-3 shadow-sm">
-        <div className="flex flex-wrap gap-2 border-b pb-2">
-          <button onClick={()=>setAnalysisTab("review")} className={`rounded px-3 py-1.5 text-xs font-black ${analysisTab==='review'?'bg-indigo-700 text-white':'bg-gray-100'}`}>AI自動回顧</button>
-          <button onClick={()=>setAnalysisTab("conditions")} className={`rounded px-3 py-1.5 text-xs font-black ${analysisTab==='conditions'?'bg-indigo-700 text-white':'bg-gray-100'}`}>条件別成績</button>
-          <button onClick={()=>setAnalysisTab("misses")} className={`rounded px-3 py-1.5 text-xs font-black ${analysisTab==='misses'?'bg-indigo-700 text-white':'bg-gray-100'}`}>◎敗因分析</button>
-          <button onClick={()=>setAnalysisTab("backtest")} className={`rounded px-3 py-1.5 text-xs font-black ${analysisTab==='backtest'?'bg-indigo-700 text-white':'bg-gray-100'}`}>バックテスト</button>
+{activeSavedRaceId && (()=>{const r=savedRaces.find(x=>x.id===activeSavedRaceId);return r?<div className="mx-3 mt-3 rounded-lg border border-indigo-500 p-3 text-xs"><div className="font-bold">保存した予想（回顧・成績の基準）</div><div className="mt-1">{predictionOrder(r).filter(h=>h.mark).map(h=>`${h.mark}${h.umaban} ${h.name}`).join(" ／ ")}</div><div className="mt-1">以下の全頭評価は現行方式による参考再評価です。結果登録で保存予想を上書きしません。</div><button onClick={correctRaceIdentity} className="mt-2 rounded bg-indigo-700 p-2">入力中の開催日・Rで開催情報を訂正</button></div>:null;})()}
+{!buyDecision.main && <div className="app-empty mx-3 mt-3"><h2>予想に必要なデータを入力してください</h2><p>取得データを読み込むか、入力ページで出走馬と指数を入力すると予想が表示されます。</p><button type="button" onClick={()=>openPage("input")} className="app-action">入力ページへ</button></div>}
+{buyDecision.main && (
+        <div id="buy-decision" className="mx-3 mt-3 scroll-mt-24 rounded-2xl border-2 border-emerald-300 bg-white p-4 shadow-md">
+          <div className="flex items-start justify-between gap-3">
+            <div><div className="text-[11px] font-black tracking-wide text-emerald-700">💰 AI買い判定</div><div className="mt-1 text-2xl font-black text-slate-900">{buyDecision.grade} <span className="text-base text-emerald-700">{buyDecision.label}</span></div></div>
+            <div className="rounded-xl bg-emerald-50 px-3 py-2 text-center"><div className="text-[10px] font-bold text-emerald-700">推奨</div><div className="text-lg font-black text-emerald-900">{buyDecision.ticket}</div></div>
+          </div>
+          <div className="mt-3 rounded-xl bg-slate-50 p-3">
+            <div className="text-xs font-black text-slate-800">◎ {buyDecision.main.umaban} {buyDecision.main.name || ""} <span className="font-normal text-slate-500">{buyDecision.main.ninki ? `${buyDecision.main.ninki}人気` : "人気未入力"}{buyDecision.main.odds ? ` / ${buyDecision.main.odds}倍` : ""}</span></div>
+            <div className="mt-1 text-[11px] leading-relaxed text-slate-600">{buyDecision.reason}</div>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs">
+            <div className="rounded-lg bg-indigo-50 p-2"><div className="text-[10px] text-indigo-600">同版・同方式の事前固定記録</div><div className="mt-0.5 font-black text-indigo-900">勝率 {buyDecision.historyN ? buyDecision.historyWinRate.toFixed(1) : "-"}% <span className="text-[9px] font-normal">({buyDecision.historyWins}/{buyDecision.historyN})</span></div></div>
+            <div className="rounded-lg bg-amber-50 p-2"><div className="text-[10px] text-amber-700">収益性：購入・払戻記録が必要</div><div className="mt-0.5 font-black text-amber-900">{buyDecision.minOdds!==null ? `${buyDecision.minOdds.toFixed(1)}倍〜` : "未検証"} <span className="text-[9px] font-normal">{buyDecision.breakEven!==null ? `/ ${buyDecision.breakEven.toFixed(1)}%` : ""}</span></div></div>
+          </div>
+          <div className="mt-2 text-[10px] leading-relaxed text-gray-400">※過去成績は保存済み結果から自動集計。払戻データを使った回収率保証ではありません。3連系は相手抜けが残るため通常は推奨しません。</div>
         </div>
-        {analysisTab==='review' && <div className="mt-3 text-xs text-gray-700">結果保存時に自動回顧を生成します。保存済みレースの「AI回顧」から、見逃した好走馬・過大評価した本命・改善候補を確認できます。</div>}
-        {analysisTab==='conditions' && <div className="mt-3 space-y-2">
-          <div className="rounded bg-amber-50 p-2 text-[10px] text-amber-800">10R未満は参考値。条件別係数を自動で強く動かさない安全設計です。</div>
-          {conditionStats.length?conditionStats.slice(0,14).map(s=><div key={s.key} className="flex justify-between rounded bg-gray-50 p-2 text-xs"><span className="font-bold">{s.key}</span><span className={s.races<10?'text-gray-400':'font-bold'}>{s.races}R / ◎勝{Math.round(s.wins/s.races*100)}% / 複{Math.round(s.places/s.races*100)}%</span></div>):<div className="text-xs text-gray-400">結果データがまだありません</div>}
-        </div>}
-        {analysisTab==='misses' && <div className="mt-3 space-y-3">
-          <div className="rounded bg-rose-50 p-3 text-xs"><span className="font-black">◎敗戦 {missAnalysis.misses}R</span><span className="ml-2 text-gray-600">勝ち馬−◎ の平均差を集計</span></div>
-          <div className="grid grid-cols-2 gap-2">{missAnalysis.factors.slice(0,8).map((f:any)=><div key={f.label} className="rounded border border-gray-200 bg-white p-2 text-xs"><div className="font-black">{f.label}</div><div className={f.avgDiff>0?'text-rose-600':'text-blue-600'}>勝ち馬との差 {f.avgDiff>0?'+':''}{f.avgDiff.toFixed(1)}</div><div className="text-[10px] text-gray-500">勝ち馬が上 {Math.round(f.rate*100)}% / {f.n}R</div></div>)}</div>
-          <div className="text-[10px] text-gray-500">※ 原因の断定ではなく、◎と実際の勝ち馬のズレを診断する画面です。</div>
-        </div>}
-        {analysisTab==='backtest' && <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4"><div className="rounded bg-indigo-50 p-3"><div>対象</div><b>{backtest.races}R（◎あり{backtest.topRaces}R）</b></div><div className="rounded bg-indigo-50 p-3"><div>◎勝率</div><b>{backtest.topRaces?Math.round(backtest.win/backtest.topRaces*100):0}%</b></div><div className="rounded bg-indigo-50 p-3"><div>◎複勝率</div><b>{backtest.topRaces?Math.round(backtest.place/backtest.topRaces*100):0}%</b></div><div className="rounded bg-indigo-50 p-3"><div>印の3着内捕捉</div><b>{backtest.races?Math.round(backtest.top3Capture/(backtest.races*3)*100):0}%</b></div></div>}
-      </div>
+      )}
+<div className="app-actions mx-3 mt-3"><button type="button" onClick={saveRaceForLater} className="app-action app-action-primary" disabled={resultEntryMode}>レースを保存</button><button type="button" onClick={()=>scrollToSection("horse-evaluation")} className="app-action">全頭評価・入力を確認</button><button type="button" onClick={()=>scrollToSection("marked-summary")} className="app-action">印・買い目へ</button><button type="button" onClick={()=>scrollToSection("race-flow")} className="app-action">展開へ</button></div>
+{raceAnalytics.marked.length > 0 && (
+        <div id="marked-summary" className="mx-3 mt-3 scroll-mt-24 grid gap-3 lg:grid-cols-3">
+          <div className="rounded-xl border border-indigo-200 bg-white p-3 shadow-sm lg:col-span-2">
+            <div className="mb-2 flex items-center justify-between"><div className="font-black text-indigo-900">🎯 印を付けた注目馬</div><div className="text-[10px] text-gray-400">印順</div></div>
+            <p className="mb-2 text-xs text-slate-500 sm:hidden">調教・コメントなどの詳細は「全頭評価・入力を確認」へ</p>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[680px] text-xs"><thead><tr className="bg-indigo-50 text-indigo-800"><th className="p-2">印</th><th>馬番</th><th className="text-left">馬名</th><th>総合</th><th>調教</th><th>コメント</th><th>人気</th><th>オッズ</th><th>期待値</th></tr></thead>
+              <tbody>{raceAnalytics.marked.map((h)=><tr key={`marked-${h.id}`} className="border-t border-gray-100"><td className="p-2 text-center text-lg font-black">{h._displayMark}</td><td className="text-center font-bold">{h.umaban}</td><td className="font-bold">{h.name}<span className="ml-1 text-[9px] text-amber-600">{h._evaluationStatus!=="指数評価"?h._evaluationStatus:""}</span></td><td className="text-center font-black">{(h._selectionScore ?? h._finalScore)?.toFixed(1) ?? "-"}</td><td className="text-center">{h._trainingScore ?? "-"}</td><td className="text-center">{h._commentScore ?? "-"}</td><td className="text-center">{h.ninki || "-"}</td><td className="text-center">{h.odds || "-"}</td><td className="text-center font-bold">{h._valueScore}</td></tr>)}</tbody></table>
+            </div>
+          </div>
+          <div className="rounded-xl border border-rose-200 bg-white p-3 shadow-sm">
+            <div className="font-black text-rose-900">🌊 波乱度</div>
+            <div className="mt-1 flex items-end gap-2"><span className="text-4xl font-black text-rose-600">{raceAnalytics.chaos}</span><span className="pb-1 text-lg font-black">{raceAnalytics.label}</span></div>
+            <div className="mt-2 h-2 overflow-hidden rounded bg-gray-100"><div className="h-full bg-rose-500" style={{width:`${raceAnalytics.chaos}%`}} /></div>
+            <div className="mt-2 space-y-1 text-[11px] text-gray-600">{raceAnalytics.reasons.slice(0,4).map((r)=><div key={r}>・{r}</div>)}</div>
+            {raceAnalytics.bets.length > 0 && <div className="mt-3 rounded-lg bg-amber-50 p-2"><div className="text-[11px] font-black text-amber-900">参考買い目</div>{raceAnalytics.bets.map((b)=><div key={b} className="mt-1 text-xs font-bold text-amber-800">{b}</div>)}</div>}
+          </div>
+        </div>
+      )}
+<details className="app-flow-details mx-3 mt-3"><summary>展開予測を見る</summary>{flowPrediction && (
+        <div id="race-flow" className="mx-3 mt-3 scroll-mt-24 rounded-2xl border border-violet-800/70 bg-slate-900/95 p-4 shadow-xl shadow-violet-950/20">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-black tracking-[0.16em] text-violet-300">🏇 ORIGINAL RACE FLOW AI</div>
+              <div className="mt-1 text-xl font-black text-white">AI展開予想図</div>
+              <div className="mt-1 text-[10px] leading-relaxed text-slate-400">印予想とは別計算。脚質・通過位置・ST・追走・上がり・枠・コース・距離・馬場・騎手・調教・コメント・馬体・休養・近走を地点別に再配分します。</div>
+            </div>
+            <div className="rounded-xl border border-violet-700 bg-violet-950/60 px-4 py-2 text-center">
+              <div className="text-[10px] font-bold text-violet-300">想定ペース</div>
+              <div className="text-2xl font-black text-white">{flowPrediction.pace}</div>
+              <div className="text-[9px] text-slate-400">独自判定 {flowPrediction.autoPace}</div>
+            </div>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button onClick={()=>setFlowScenario('main')} className={`rounded-lg px-3 py-1.5 text-[11px] font-black ${flowScenario==='main'?'bg-violet-600 text-white':'border border-slate-700 bg-slate-800 text-slate-300'}`}>本線シナリオ</button>
+            <button onClick={()=>setFlowScenario('alt')} className={`rounded-lg px-3 py-1.5 text-[11px] font-black ${flowScenario==='alt'?'bg-fuchsia-600 text-white':'border border-slate-700 bg-slate-800 text-slate-300'}`}>対抗シナリオ</button>
+          </div>
 
-      {resultEntryMode && (
+          <div className="mt-4 space-y-3">
+            {(flowScenario==='main'?flowPrediction.mainStages:flowPrediction.altStages).map((stage:any,stageIdx:number)=>{
+              const total=Math.max(...stage.horses.map((x:any)=>Number(x.umaban)||0),stage.horses.length);
+              return <div key={stage.label} className="overflow-hidden rounded-xl border border-slate-700 bg-[#08111f]">
+                <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
+                  <div className="font-black text-slate-100">{stage.label} <span className="ml-1 text-[10px] font-normal text-slate-500">進行方向 ←</span></div>
+                  <div className="text-[10px] text-slate-400">信頼度 <span className="font-black text-cyan-300">{stage.confidence}</span></div>
+                </div>
+                <div className="relative h-[112px] overflow-hidden bg-[linear-gradient(90deg,rgba(15,23,42,.15),rgba(30,41,59,.35)),repeating-linear-gradient(0deg,transparent,transparent_36px,rgba(148,163,184,.08)_37px)]">
+                  <div className="absolute inset-y-0 left-[6%] border-l border-dashed border-cyan-500/30" />
+                  <div className="absolute bottom-1 left-2 text-[9px] text-cyan-500/60">前</div><div className="absolute bottom-1 right-2 text-[9px] text-slate-600">後</div>
+                  {stage.horses.map((h:any,i:number)=>{
+                    const w=wakuOf(h.umaban,total)||4; const wc=WAKU_COLORS[w];
+                    const left=6+(i/Math.max(1,stage.horses.length-1))*86;
+                    const lane=((Number(h.umaban)||i)%3)*30+9;
+                    return <button key={`${stage.label}-${h.id}`} title={`${h.umaban} ${h.name}｜${flowReason(h)}`} className="absolute -translate-x-1/2 rounded-full border-2 shadow-lg transition-transform hover:scale-110" style={{left:`${left}%`,top:`${lane}px`,background:wc.bg,color:wc.text,borderColor:wc.border,width:'28px',height:'28px',fontSize:'11px',fontWeight:900}}>{h.umaban}</button>
+                  })}
+                </div>
+                <div className="flex gap-1 overflow-x-auto border-t border-slate-800 px-2 py-2">
+                  {stage.horses.slice(0,6).map((h:any,i:number)=><span key={`order-${stage.label}-${h.id}`} className="shrink-0 rounded-md bg-slate-800 px-2 py-1 text-[9px] text-slate-300"><b className="text-white">{i+1}</b> {h.umaban} {h.name}<span className="ml-1 text-[9px] text-amber-600">{h._evaluationStatus!=="指数評価"?h._evaluationStatus:""}</span></span>)}
+                </div>
+              </div>
+            })}
+          </div>
+
+          <div className="mt-4 rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+            <div className="text-[11px] font-black text-violet-300">AIの読み</div>
+            <div className="mt-1 text-xs leading-relaxed text-slate-200">{flowPrediction.narrative}</div>
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-xl border border-emerald-800/70 bg-emerald-950/30 p-3"><div className="text-[11px] font-black text-emerald-300">↑ 展開追い風</div><div className="mt-2 space-y-1">{flowPrediction.advantages.map((h:any)=><div key={`adv-${h.id}`} className="flex items-center justify-between text-xs"><span className="font-bold text-slate-100">{h.umaban} {h.name}<span className="ml-1 text-[9px] text-amber-600">{h._evaluationStatus!=="指数評価"?h._evaluationStatus:""}</span></span><span className="text-[10px] text-emerald-300">{flowReason(h)}</span></div>)}</div></div>
+            <div className="rounded-xl border border-rose-900/70 bg-rose-950/25 p-3"><div className="text-[11px] font-black text-rose-300">↓ 展開逆風</div><div className="mt-2 space-y-1">{flowPrediction.disadvantages.map((h:any)=><div key={`dis-${h.id}`} className="flex items-center justify-between text-xs"><span className="font-bold text-slate-100">{h.umaban} {h.name}<span className="ml-1 text-[9px] text-amber-600">{h._evaluationStatus!=="指数評価"?h._evaluationStatus:""}</span></span><span className="text-[10px] text-rose-300">前半消耗・位置取りを警戒</span></div>)}</div></div>
+          </div>
+
+          <div className="mt-3 rounded-xl border border-cyan-900/70 bg-cyan-950/20 p-3">
+            <div className="text-[11px] font-black text-cyan-300">印 × 展開の乖離チェック</div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">{ranked.filter((h:any)=>h._autoMark).sort((a:any,b:any)=>(MARK_ORDER[a._autoMark]??9)-(MARK_ORDER[b._autoMark]??9)).slice(0,7).map((h:any)=>{
+              const fr=flowPrediction.flowRank.get(h.id)||99; const pr=h._rank||99; const diff=fr-pr;
+              const msg=diff>=3?'能力評価上位だが展開は逆風':diff<=-3?'展開恩恵が大きい': '印と展開が概ね一致';
+              return <div key={`gap-${h.id}`} className="rounded-lg bg-slate-900 px-3 py-2 text-xs"><div className="flex items-center justify-between"><span className="font-black text-white">{h._autoMark} {h.umaban} {h.name}<span className="ml-1 text-[9px] text-amber-600">{h._evaluationStatus!=="指数評価"?h._evaluationStatus:""}</span></span><span className={`text-[10px] font-bold ${diff>=3?'text-rose-300':diff<=-3?'text-emerald-300':'text-slate-400'}`}>{msg}</span></div><div className="mt-1 text-[9px] text-slate-500">総合順位 {pr}位 / 展開ゴール前 {fr}位</div></div>
+            })}</div>
+          </div>
+          <div className="mt-2 text-[9px] leading-relaxed text-slate-500">※展開図は位置取りシミュレーションで、印順位そのものではありません。人気・オッズは隊列決定には使用せず、保存時に展開スナップショットを残します。</div>
+        </div>
+      )}</details>
+</main>}
+{appPage==="results" && <main id="page-results" role="tabpanel" aria-labelledby="tab-results" className="app-page" tabIndex={-1}>
+<div className="app-page-heading"><h1>成績・結果</h1><p>保存した予想の振り返りと、結果の登録</p></div>
+<div className="app-result-overview mx-3 mt-3"><h2>事前に保存した予想の成績</h2><div className="app-stat-grid"><div><span>対象</span><strong>{integrityStats.prospective.topN}<small> R</small></strong></div><div><span>◎勝利</span><strong>{integrityStats.prospective.wins}<small> R</small></strong></div><div><span>◎勝率</span><strong>{integrityStats.prospective.topN?Math.round(integrityStats.prospective.wins/integrityStats.prospective.topN*100):0}<small> %</small></strong></div></div><p>旧記録・隔離された記録はこの集計に含めません。</p></div>
+{resultEntryMode && (
         <div id="result-entry-panel" className="mx-3 mt-3 scroll-mt-3 rounded-xl border-2 border-amber-400 bg-amber-50 p-3 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -3292,21 +3211,55 @@ export default function JRAPredictionTool() {
           </div>
         </div>
       )}
-
-      {savedRacesOpen && (
+<div className="mx-3 mt-3 rounded-lg border border-purple-600 p-3 text-xs">
+        <button onClick={importResultFile} className="rounded bg-purple-700 px-3 py-2 font-bold">結果ファイルを読み込む</button>
+        <div className="mt-2">開催日・競馬場・Rと全頭の馬番・馬名を照合します。保存した予想を保持して着順・払戻を反映し、回顧と学習を更新します。</div>
+        {resultImportPlan&&<div className="mt-3">
+          <div className="font-bold">反映可能 {resultImportPlan.updated}件 ／ 反映済み {resultImportPlan.report.filter(r=>r.status==='same').length}件 ／ 要確認 {resultImportPlan.report.filter(r=>r.status==='skip').length}件</div>
+          <ul className="mt-2 max-h-64 space-y-2 overflow-y-auto">{resultImportPlan.report.map((r,i)=><li key={i} className={r.status==='skip'?'text-amber-400':''}>{r.label}：{r.reason}</li>)}</ul>
+          <button disabled={!resultImportPlan.updated} onClick={applyResultFile} className="mt-3 rounded bg-purple-700 px-3 py-2 font-bold disabled:opacity-40">結果を反映する</button>
+        </div>}
+        {resultImportMessage&&<div role="status" className="mt-3 whitespace-pre-wrap">{resultImportMessage}</div>}
+      </div>
+<div className="app-actions mx-3 mt-3"><button type="button" onClick={()=>openPage("saved")} className="app-action">保存レースから結果を入力</button></div>
+<div className="mx-3 mt-3 rounded-xl border border-indigo-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap gap-2 border-b pb-2">
+          <button onClick={()=>setAnalysisTab("review")} className={`rounded px-3 py-1.5 text-xs font-black ${analysisTab==='review'?'bg-indigo-700 text-white':'bg-gray-100'}`}>AI自動回顧</button>
+          <button onClick={()=>setAnalysisTab("conditions")} className={`rounded px-3 py-1.5 text-xs font-black ${analysisTab==='conditions'?'bg-indigo-700 text-white':'bg-gray-100'}`}>条件別成績</button>
+          <button onClick={()=>setAnalysisTab("misses")} className={`rounded px-3 py-1.5 text-xs font-black ${analysisTab==='misses'?'bg-indigo-700 text-white':'bg-gray-100'}`}>◎敗因分析</button>
+          <button onClick={()=>setAnalysisTab("backtest")} className={`rounded px-3 py-1.5 text-xs font-black ${analysisTab==='backtest'?'bg-indigo-700 text-white':'bg-gray-100'}`}>バックテスト</button>
+        </div>
+        {analysisTab==='review' && <div className="mt-3 text-xs text-gray-700">結果保存時に自動回顧を生成します。保存レースページの「AI回顧」から、見逃した好走馬・過大評価した本命・改善候補を確認できます。</div>}
+        {analysisTab==='conditions' && <div className="mt-3 space-y-2">
+          <div className="rounded bg-amber-50 p-2 text-[10px] text-amber-800">10R未満は参考値。条件別係数を自動で強く動かさない安全設計です。</div>
+          {conditionStats.length?conditionStats.slice(0,14).map(s=><div key={s.key} className="flex justify-between rounded bg-gray-50 p-2 text-xs"><span className="font-bold">{s.key}</span><span className={s.races<10?'text-gray-400':'font-bold'}>{s.races}R / ◎勝{Math.round(s.wins/s.races*100)}% / 複{Math.round(s.places/s.races*100)}%</span></div>):<div className="text-xs text-gray-400">結果データがまだありません</div>}
+        </div>}
+        {analysisTab==='misses' && <div className="mt-3 space-y-3">
+          <div className="rounded bg-rose-50 p-3 text-xs"><span className="font-black">◎敗戦 {missAnalysis.misses}R</span><span className="ml-2 text-gray-600">勝ち馬−◎ の平均差を集計</span></div>
+          <div className="grid grid-cols-2 gap-2">{missAnalysis.factors.slice(0,8).map((f:any)=><div key={f.label} className="rounded border border-gray-200 bg-white p-2 text-xs"><div className="font-black">{f.label}</div><div className={f.avgDiff>0?'text-rose-600':'text-blue-600'}>勝ち馬との差 {f.avgDiff>0?'+':''}{f.avgDiff.toFixed(1)}</div><div className="text-[10px] text-gray-500">勝ち馬が上 {Math.round(f.rate*100)}% / {f.n}R</div></div>)}</div>
+          <div className="text-[10px] text-gray-500">※ 原因の断定ではなく、◎と実際の勝ち馬のズレを診断する画面です。</div>
+        </div>}
+        {analysisTab==='backtest' && <div className="mt-3 grid grid-cols-2 gap-2 text-center text-xs sm:grid-cols-4"><div className="rounded bg-indigo-50 p-3"><div>対象</div><b>{backtest.races}R（◎あり{backtest.topRaces}R）</b></div><div className="rounded bg-indigo-50 p-3"><div>◎勝率</div><b>{backtest.topRaces?Math.round(backtest.win/backtest.topRaces*100):0}%</b></div><div className="rounded bg-indigo-50 p-3"><div>◎複勝率</div><b>{backtest.topRaces?Math.round(backtest.place/backtest.topRaces*100):0}%</b></div><div className="rounded bg-indigo-50 p-3"><div>印の3着内捕捉</div><b>{backtest.races?Math.round(backtest.top3Capture/(backtest.races*3)*100):0}%</b></div></div>}
+      </div>
+</main>}
+{appPage==="saved" && <main id="page-saved" role="tabpanel" aria-labelledby="tab-saved" className="app-page" tabIndex={-1}>
+<div className="app-page-heading"><h1>保存レース</h1><p>保存した予想・結果・回顧を開く</p></div>
+<div className="app-archive-filters mx-3 mt-3"><label>開催日<select value={archiveDate} onChange={e=>setArchiveDate(e.target.value)}><option value="">すべての日付</option>{[...new Set(savedRaces.map(r=>r.raceDate).filter(Boolean))].sort().reverse().map(date=><option key={date} value={date}>{date}</option>)}</select></label><label>競馬場<select value={archiveTrack} onChange={e=>setArchiveTrack(e.target.value)}><option value="">すべての競馬場</option>{JRA_TRACKS.map(t=><option key={t}>{t}</option>)}</select></label><p>{savedRaces.filter(r=>(!archiveDate||r.raceDate===archiveDate)&&(!archiveTrack||r.track===archiveTrack)).length}件を表示</p></div>
+<div className="app-actions mx-3 mt-3"><button type="button" onClick={exportFullBackup} className="app-action">全データ保存</button><button type="button" onClick={importFullBackup} className="app-action">全データ読込</button></div>
+{true && (
         <div className="mx-3 mt-2 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
           <div className="mb-2 flex items-center justify-between">
             <div>
               <div className="font-black text-slate-800">保存済みレース</div>
               <div className="text-[10px] text-slate-500">予想を保存し、レース終了後に「結果を入力」から呼び出します。</div>
             </div>
-            <button onClick={() => setSavedRacesOpen(false)} className="text-xs text-slate-400">閉じる</button>
+            
           </div>
           {savedRaces.length === 0 ? (
             <div className="rounded bg-slate-50 p-4 text-center text-xs text-slate-400">保存済みレースはありません。</div>
           ) : (
             <div className="space-y-2">
-              {savedRaces.map((race) => (
+              {savedRaces.filter(r=>(!archiveDate||r.raceDate===archiveDate)&&(!archiveTrack||r.track===archiveTrack)).map((race) => (
                 <div key={race.id} className="rounded-lg border border-slate-200 p-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -3336,39 +3289,77 @@ export default function JRAPredictionTool() {
           )}
         </div>
       )}
-
-      {importOpen && (
-        <div className="bg-white mx-3 mt-2 rounded-lg shadow-sm border border-gray-200 p-3">
-          <div className="text-xs text-gray-500 mb-1">
-            列順: 馬番,予想印,馬名,全体,スタート,追走,上がり,5走平均,距離,コース,3走,2走,前走,性齢,斤量,騎手。
-            「タイム指数マスター」画面のコピーをそのまま貼り付けてOK（改行が崩れても「牡4」等の性齢を目印に自動補正します。前後に余計な文章が混ざっても大丈夫です）
+</main>}
+{appPage==="settings" && <main id="page-settings" role="tabpanel" aria-labelledby="tab-settings" className="app-page" tabIndex={-1}>
+<div className="app-page-heading"><h1>設定</h1><p>予想の設定・検証モード・学習状況</p></div>
+<div className="mx-3 mt-3 rounded-lg border border-slate-600 p-3 text-xs">
+        v3.13.4-fix1 ／ 事前固定の検証 {integrityStats.prospective.n}件（◎あり{integrityStats.prospective.topN}件）・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
+        <label className="mt-2 mb-2 flex gap-2"><input type="checkbox" checked={experimentalOn} onChange={e=>setExperimentalOn(e.target.checked)} />新しい評価方式を検証する（指数不足の補助評価・固定頭数。過去比較で優位性未確認）</label>
+        <div className="mt-1">旧記録の予想は保存値を保持します。修正後の再予想を過去の的中実績には加えません。発走日時未入力の新規記録も事前検証とは分けます。</div>
+      </div>
+<div className="mx-3 mt-3 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <button onClick={()=>setSettingsOpen(v=>!v)} className="flex w-full items-center justify-between px-4 py-3 text-left">
+          <div><div className="text-sm font-black text-slate-800">⚙️ 詳細設定</div><div className="text-[10px] text-slate-500">普段は閉じたままでOK。ウェイト・市場補正・学習設定</div></div>
+          <span className="text-slate-500">{settingsOpen ? "▲" : "▼"}</span>
+        </button>
+        {settingsOpen && <div className="border-t border-slate-100 pb-3">
+      {/* 4軸ウェイト設定 */}
+      <div className="bg-white mx-3 mt-3 rounded-lg shadow-sm border border-gray-200 p-3">
+        <div className="text-xs font-bold text-gray-500 mb-2">4軸ウェイト設定（合計 {wSum}）</div>
+        {[
+          ["best", "全体最高"],
+          ["avg5", "5走平均"],
+          ["dist", "距離指数"],
+          ["course", "コース指数"],
+        ].map(([key, label]) => (
+          <div key={key} className="flex items-center gap-2 mb-1">
+            <span className="text-xs w-16 text-gray-600">{label}</span>
+            <input type="range" min="0" max="60" value={weights[key]} onChange={(e) => setW(key, e.target.value)} className="flex-1" />
+            <span className="text-xs w-8 text-right font-mono">{weights[key]}</span>
           </div>
-          <textarea
-            value={bulkText}
-            onChange={(e) => setBulkText(e.target.value)}
-            rows={6}
-            className="w-full border border-gray-300 rounded p-2 text-xs font-mono"
-            placeholder="1	--	ボーンディスウェイ	101	97	96	107	97	109	102	89	96	100	牡7	56.0	丸山元気"
-          />
-          <div className="flex gap-2 mt-2">
-            <button onClick={runBulkImport} className="bg-green-600 text-white text-xs font-bold px-3 py-2 rounded">取り込む</button>
-            <button onClick={() => setImportOpen(false)} className="text-xs text-gray-500 px-3 py-2">閉じる</button>
-          </div>
-        </div>
-      )}
+        ))}
+      </div>
 
-      {exportText && (
-        <div className="bg-white mx-3 mt-2 rounded-lg shadow-sm border border-gray-200 p-3">
-          <textarea value={exportText} onChange={(e) => setExportText(e.target.value)} rows={6} className="w-full border border-gray-300 rounded p-2 text-xs font-mono" />
-          <div className="flex gap-2 mt-2">
-            <button onClick={copyExport} className="bg-blue-700 text-white text-xs font-bold px-3 py-2 rounded">コピー</button>
-            <button onClick={doImportJson} className="bg-green-600 text-white text-xs font-bold px-3 py-2 rounded">このJSONを読み込む</button>
-            <button onClick={() => setExportText("")} className="text-xs text-gray-500 px-3 py-2">閉じる</button>
+      {/* オッズ補正 */}
+      <div className="bg-white mx-3 mt-3 rounded-lg shadow-sm border border-gray-200 p-3">
+        <label className="flex items-center gap-2 text-xs font-bold text-gray-600 mb-2">
+          <input type="checkbox" checked={oddsOn} onChange={(e) => setOddsOn(e.target.checked)} />
+          市場人気補正を有効化（低オッズを弱く加点）
+        </label>
+        {oddsOn && (
+          <div>
+            <div className="text-xs text-gray-500 mb-1">補正強度: {oddsStrength}%（推奨 6〜12）</div>
+            <input type="range" min="0" max="20" value={oddsStrength} onChange={(e) => setOddsStrength(Number(e.target.value))} className="w-full" />
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-    </div>
+      <div className="bg-white mx-3 mt-3 rounded-lg shadow-sm border border-gray-200 p-3">
+        <label className="flex items-center gap-2 text-xs font-bold text-gray-600">
+          <input type="checkbox" checked={learningOn} onChange={(e) => setLearningOn(e.target.checked)} />
+          結果学習を予想へ反映（学習済み {historyCount}レース）
+        </label>
+        <div className="text-[11px] text-gray-400 mt-1">解析後は「レースを保存」。レース終了後は「3-11-5」のように1〜3着の馬番だけ入力すると、自動回顧と学習を行います。</div>
+      </div>
+
+        </div>}
+      </div>
+<div className="mx-3 mt-3 rounded-xl border border-violet-200 bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2"><div><div className="font-black text-violet-900">🧠 自動学習</div><div className="text-[10px] text-gray-500">結果保存時に好走馬と凡走馬を比較して重みを自動調整</div></div><div className="text-sm font-black text-violet-700">{historyCount}レース学習</div></div>
+        <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs"><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">◎勝率</div><div className="font-black">{learningSummary.topTotal ? Math.round(learningSummary.topWin/learningSummary.topTotal*100) : 0}% <span className="text-[9px] text-gray-400">({learningSummary.topWin}/{learningSummary.topTotal})</span></div></div><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">◎複勝率</div><div className="font-black">{learningSummary.topTotal ? Math.round(learningSummary.topPlace/learningSummary.topTotal*100) : 0}% <span className="text-[9px] text-gray-400">({learningSummary.topPlace}/{learningSummary.topTotal})</span></div></div><div className="rounded bg-violet-50 p-2"><div className="text-gray-500">印の3着内捕捉率</div><div className="font-black">{learningSummary.totalTop3 ? Math.round(learningSummary.markedTop3/learningSummary.totalTop3*100) : 0}% <span className="text-[9px] text-gray-400">({learningSummary.markedTop3}/{learningSummary.totalTop3})</span></div></div></div>
+        <div className="mt-2 flex flex-wrap items-center gap-2"><button onClick={relearnAllCompleted} className="rounded bg-violet-700 px-3 py-1.5 text-[10px] font-black text-white">既存結果から全再学習</button><span className="text-[10px] text-gray-500">1〜3着だけで、上位3頭とその他を比較。差が小さい項目は動かしません。</span></div>
+        {learningHistory.length>0 && <div className="mt-2 rounded bg-violet-50 p-2 text-[10px] text-violet-900"><div className="font-black">直近の学習変更</div><div className="mt-1">{Object.entries(learningHistory[0].changes||{}).map(([k,v]:any)=>`${k} ${v>0?"+":""}${Number(v).toFixed(3)}`).join(" / ") || "変更なし"}</div></div>}
+        <div className="mt-2 flex flex-wrap gap-1 text-[10px] text-gray-600">{Object.entries(learned).map(([k,v])=><span key={k} className="rounded bg-gray-100 px-2 py-1">{k}: {Number(v).toFixed(2)}</span>)}</div>
+      </div>
+</main>}
+<nav aria-label="メインメニュー" className="app-bottom-nav"><div role="tablist" aria-label="ページを切り替え" className="app-tabs">
+{APP_PAGES.map((page,index)=><button key={page.id} id={`tab-${page.id}`} type="button" role="tab" aria-selected={appPage===page.id} aria-controls={`page-${page.id}`} tabIndex={appPage===page.id?0:-1} onClick={()=>openPage(page.id)} onKeyDown={event=>{
+if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?APP_PAGES.length-1:(index+(event.key==='ArrowRight'?1:-1)+APP_PAGES.length)%APP_PAGES.length;
+openPage(APP_PAGES[next].id);document.getElementById(`tab-${APP_PAGES[next].id}`)?.focus();
+}} className={`app-tab ${appPage===page.id?'app-tab-active':''}`}><span aria-hidden="true" className="app-tab-icon">{page.icon}</span><span>{page.label}</span></button>)}
+</div></nav>
+</div>
   );
 }
 
