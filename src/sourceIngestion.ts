@@ -3,7 +3,7 @@ import { parseNetkeibaTraining, parseNetkeibaComments } from './netkeibaFallback
 import { strictNumber } from './integrity';
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 const normalize=s=>String(s||'').replace(/\r/g,'').replace(/\u00a0/g,' ');
-const indexValue=s=>{const t=String(s||'').trim();if(/^(?:-|--|未)$/.test(t))return '';const n=strictNumber(t);if(n===null||n< -200||n>200)throw Error(`指数列に異常値: ${t}`);return String(n);};
+const indexValue=s=>{const t=String(s||'').trim();if(/^(?:-|--|未)$/.test(t))return '';const n=strictNumber(t);if(n===null||n< -1000||n>1000)throw Error(`指数列に異常値: ${t}`);return String(n);};
 const nameKey=s=>String(s||'').replace(/[\s・･]/g,'');
 const tracks='札幌|函館|福島|新潟|東京|中山|中京|京都|阪神|小倉';
 const fit=(a,b,c,d)=>{const total=a+b+c+d;return total?String(Math.round(clamp(50+((a+b*.66+c*.4)/total-.25)*42*total/(total+5),35,72))):'50';};
