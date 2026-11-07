@@ -1,3 +1,4 @@
+import { parseNetkeibaTraining, parseNetkeibaComments, fallbackSourceLabel } from "./netkeibaFallback";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { planBulkSave } from "./bulkSave";
 import { validateSourceBundle, validateSourceCollection, sourceRaceKey } from "./sourceIngestion";
@@ -325,6 +326,7 @@ export default function JRAPredictionTool() {
   const [resultImportData,setResultImportData]=useState<any>(null);
   const [resultImportMessage,setResultImportMessage]=useState("");
   const resultImportPlan=useMemo(()=>resultImportData?planResultImport(savedRaces,resultImportData):null,[savedRaces,resultImportData]);
+  const [useNetFallback,setUseNetFallback]=useState(false);
   const [sourceCollection,setSourceCollection]=useState<any[]>([]);
   const [bulkSaving,setBulkSaving]=useState(false);
   const bulkSaveLock=useRef(false);
@@ -584,7 +586,7 @@ export default function JRAPredictionTool() {
     setRaceDate(r.raceDate);setRaceNumber(r.raceNumber);setScheduledStart(r.scheduledStart);setRaceName(r.raceName);
     setTrack(r.track);setSurface(r.surface);setDistance(r.distance);setGoing(r.going);setRaceClass(r.raceClass);setPaceType(r.paceType);
     setHorses(r.horses.map(h=>autoCompleteHorseFactors({...cleanHorse(h),id:crypto.randomUUID(),finish:"",mark:h.entryStatus==="取消"?"消":"",_sourceBundle:{acquiredAt:bundle.acquiredAt,sourceIds:bundle.sourceIds}},r)));
-    setSourceMessage(`${r.track}${r.raceNumber}R・${r.horses.length}頭を開きました。予想を確認して「レースを保存」を押してください。`);
+    setSourceMessage(`${fallbackSourceLabel(r.horses)} ${r.track}${r.raceNumber}R・${r.horses.length}頭を開きました。予想を確認して「レースを保存」を押してください。`);
   };
   const importAutoSource = () => {
     const input=document.createElement("input");input.type="file";input.accept="application/json,.json";
@@ -1135,6 +1137,7 @@ export default function JRAPredictionTool() {
         chunks.push(lines[j]);
       }
       h.comment = chunks.join(" ").replace(/^[◎○▲△×]\s*/, "");
+      h.commentSource="manual";h.commentSourceStatus="available";h.commentSourceMark="";h.commentRaw="";
       h.condition = String(commentScore(h.comment));
       if (/距離短縮.*(?:期待|合う|プラス)|短縮.*好材料/.test(h.comment)) h.classFit = String(Math.max(num(h.classFit)||50, 56));
       if (/芝.*(?:合う|問題ない)|ダート.*(?:合う|問題ない)/.test(h.comment)) h.groundFit = String(Math.max(num(h.groundFit)||50, 56));
@@ -1226,6 +1229,7 @@ export default function JRAPredictionTool() {
       const evaluated = scoreBlock(block);
       horse.training = evaluated.grade;
       horse.trainingScore = String(evaluated.numeric);
+      horse.trainingSource="manual";horse.trainingSourceStatus="available";horse.trainingSourceGrade="";
       horse.trainingNote = `${block.summary}${block.arrow ? ` ${block.arrow}` : ""}`.trim();
       applied += 1;
     }
@@ -1257,7 +1261,7 @@ export default function JRAPredictionTool() {
             if (horse) break;
           }
         }
-        if (horse) { horse.training = grade; horse.trainingScore = String(GRADE_TO_TRAINING_100[grade] ?? 70); }
+        if (horse) { horse.trainingSource="manual";horse.trainingSourceStatus="available";horse.trainingSourceGrade="";horse.training = grade; horse.trainingScore = String(GRADE_TO_TRAINING_100[grade] ?? 70); }
       }
     }
     return list.map((h)=>autoCompleteHorseFactors(h, { track, surface, distance, raceClass }));
@@ -2830,6 +2834,8 @@ export default function JRAPredictionTool() {
           <span className="text-emerald-700">{scanOpen ? "▲" : "▼"}</span>
         </button>
         {scanOpen && <div className="p-3">
+          <label className="block mb-3 text-sm"><input type="checkbox" checked={useNetFallback} onChange={e=>setUseNetFallback(e.target.checked)}/> 調教・コメントをnetkeibaで一時代用（通常は競馬ブック）</label>
+          {useNetFallback && <p className="mb-3 text-sm">調教は「前走」付きの馬番・馬名から貼り付け。コメントは馬番・馬名・担当者・Q行・本文の順です。空欄は既存コメントを消さず保持します。JSONでは未取得を明示できます。</p>}
           <div className="mb-3 rounded-xl bg-emerald-50 p-3 text-[11px] leading-relaxed text-emerald-900"><span className="font-black">入力はこの順番で上から貼るだけ。</span> 最後に「テキストを一括反映」を押すと、そのまま全頭評価へ移動します。</div>
           <div className="grid gap-3 lg:grid-cols-2">
             {SCAN_TYPES.map(([type,label,desc], index)=><div key={type} className="rounded-xl border border-gray-200 bg-gray-50 p-3 shadow-sm">
@@ -2869,8 +2875,11 @@ export default function JRAPredictionTool() {
                 if(scanText.recent) next=parseIndexText(scanText.recent,next,true);
               } catch(e) {flash(e instanceof Error?e.message:"指数形式を確認してください");return;}
               if(scanText.pace) parsePaceText(scanText.pace);
-              if(scanText.comment) next=parseCommentText(scanText.comment,next);
-              if(scanText.training) next=parseTrainingText(scanText.training,next);
+              try {
+                if(scanText.comment) next=useNetFallback?parseNetkeibaComments(scanText.comment,next).horses:parseCommentText(scanText.comment,next);
+                if(scanText.training) next=useNetFallback?parseNetkeibaTraining(scanText.training,next).horses:parseTrainingText(scanText.training,next);
+                if(useNetFallback) next=next.map(h=>h.comment?h:{...h,commentSource:'netkeiba',commentSourceStatus:'unavailable'});
+              } catch(e) {flash(e instanceof Error?e.message:"代用データを確認してください");return;}
               if(scanText.details) next=parseDetailRaceText(scanText.details,next);
 
               const validBefore = usableBefore;
@@ -3060,6 +3069,7 @@ export default function JRAPredictionTool() {
 </main>}
 {appPage==="prediction" && <main id="page-prediction" role="tabpanel" aria-labelledby="tab-prediction" className="app-page" tabIndex={-1}>
 <div className="app-page-heading"><h1>AI予想</h1><p>信頼度・注目馬・買い目・展開を確認</p></div>
+{fallbackSourceLabel(horses)&&<div className="mx-3 mt-3 rounded-xl border border-amber-500 p-3 text-sm" role="status">{fallbackSourceLabel(horses)}</div>}
 {sourceCollection.length>0 && <div className="app-race-picker mx-3 mt-3"><label htmlFor="ai-race-picker">レースを選ぶ</label><div><select id="ai-race-picker" value={sourceSelection} onChange={e=>setSourceSelection(e.target.value)}>{sourceCollection.map(b=><option key={sourceRaceKey(b)} value={sourceRaceKey(b)}>{b.race.raceDate} {b.race.track}{b.race.raceNumber}R {b.race.raceName}</option>)}</select><button type="button" className="app-action" onClick={openSelectedSource}>開く</button></div></div>}
 
 <div className="mx-3 mt-3 grid gap-3 md:grid-cols-2">

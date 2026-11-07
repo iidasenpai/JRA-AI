@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { parseNetkeibaTraining, parseNetkeibaComments } from './netkeibaFallback';
 import { strictNumber } from './integrity';
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 const normalize=s=>String(s||'').replace(/\r/g,'').replace(/\u00a0/g,' ');
@@ -149,14 +150,17 @@ export function parseCollectedPages(pages, acquiredAt=new Date().toISOString()){
   return {type:'jra-ai-source-bundle',version:1,acquiredAt,complete:true,race,sourceIds:{netkeiba:raceId,keibabook:bookId},sources:Object.fromEntries(required.map(k=>[k,{url:pages[k].url,acquiredAt:pages[k].acquiredAt||acquiredAt,count:expected}])),missing:[],notes:[...(noIndices?['新馬戦：タイム指数は提供されていません。AI展開のペースが未提供の場合も空欄です。']:[]),'馬体重は未発表なら空欄。近走の馬体重で代用しません。','取得時点の入力資料です。予想の保存は別途必要です。']};
 }
 export function validateSourceBundle(bundle){
-  if(bundle?.type!=='jra-ai-source-bundle'||bundle.version!==1||bundle.complete!==true||!Array.isArray(bundle.missing)||bundle.missing.length)throw Error('未完成または未対応の取得データです');
+  const fallback=bundle?.version===2 && bundle?.sourceMode==='netkeiba-fallback';
+  if(bundle?.type!=='jra-ai-source-bundle'||(!fallback&&bundle.version!==1)||bundle.complete!==true||!Array.isArray(bundle.missing)||bundle.missing.length)throw Error('未完成または未対応の取得データです');
   const r=bundle.race,n=r?.horses?.length,required=['race','details','standard','recent','training','comments'];
   if(!r||!Array.isArray(r.horses)||n<1||n>18||!/^\d{4}-\d{2}-\d{2}$/.test(r.raceDate)||!new RegExp(`^(${tracks})$`).test(r.track)||!/^([1-9]|1[0-2])$/.test(r.raceNumber))throw Error('開催情報が不正です');
   if(!['芝','ダート'].includes(r.surface)||!/^\d{3,4}$/.test(String(r.distance))||!Number.isFinite(Date.parse(r.scheduledStart))||!Number.isFinite(Date.parse(bundle.acquiredAt)))throw Error('芝ダ・距離・日時が不正です');
-  for(const k of required){const a=bundle.sources?.[k];if(!a||a.count!==n)throw Error(`${k}の頭数が一致しません`);const u=new URL(a.url);if(u.protocol!=='https:'||!['race.sp.netkeiba.com','s.keibabook.co.jp'].includes(u.hostname))throw Error('取得元が不正です');}
+  for(const k of required){const a=bundle.sources?.[k];if(fallback&&k==='comments'){if(!a||!['available','partial','unavailable'].includes(a.status)||a.count!==r.horses.filter(h=>!!h.comment).length||!a.url)throw Error('代用コメントの取得状態が不正');}else if(!a||a.count!==n)throw Error(`${k}の頭数が一致しません`);const u=new URL(a.url);if(u.protocol!=='https:'||!['race.sp.netkeiba.com','s.keibabook.co.jp'].includes(u.hostname))throw Error('取得元が不正です');if(fallback&&(u.hostname!=='race.sp.netkeiba.com'||u.searchParams.get('race_id')!==bundle.sourceIds?.netkeiba))throw Error('代用元のレースID・サイトが不一致');}
+  if(fallback){const id=bundle.sourceIds?.netkeiba;if(!/^\d{12}$/.test(id||'')||id.slice(0,4)!==r.raceDate.slice(0,4)||Number(id.slice(-2))!==Number(r.raceNumber))throw Error('代用元の開催情報が不一致');const count=r.horses.filter(h=>!!h.comment).length;if(bundle.sources.comments.status!==(count===n?'available':count?'partial':'unavailable'))throw Error('コメント掲載状態と件数が不一致');}
   if(new Set(r.horses.map(h=>String(h.umaban))).size!==n||new Set(r.horses.map(h=>nameKey(h.name))).size!==n)throw Error('馬番・馬名が重複しています');
-  for(const h of r.horses){if(!/^(?:[1-9]|1[0-8])$/.test(String(h.umaban))||!h.name||!h.trainingNote||!h.comment||strictNumber(h.trainingScore)===null)throw Error('馬情報・調教・コメントが不足しています');
-    const subject=h.comment.match(/^[◎○▲△×]?([^【]+)【/)?.[1];if(nameKey(subject)!==nameKey(h.name))throw Error('コメントの対象馬が一致しません');
+  for(const h of r.horses){if(!/^(?:[1-9]|1[0-8])$/.test(String(h.umaban))||!h.name||!h.trainingNote||(!fallback&&!h.comment)||strictNumber(h.trainingScore)===null)throw Error('馬情報・調教・コメントが不足しています');
+    if(fallback){if(h.trainingSource!=='netkeiba'||h.trainingScore!==String({S:92,A:82,B:70,C:56,D:40}[h.training])||h.commentSource!=='netkeiba'||h.commentSourceStatus!==(h.comment?'substitute':'unavailable'))throw Error('代用データの取得状態・調教評価が不正');}
+    const subject=String(h.comment||'').match(/^[◎○▲△×]?([^【]+)【/)?.[1];if((!fallback||h.comment)&&nameKey(subject)!==nameKey(h.name))throw Error('コメントの対象馬が一致しません');
     for(const k of ['best','start','oikake','agari','avg5','dist','course','r1','r2','r3'])if(h[k]!==''&&h[k]!=null)indexValue(h[k]);
   }
   return r;
@@ -179,4 +183,18 @@ export function validateSourceCollection(data){
     seen.add(key);
   });
   return [...bundles].sort((a,b)=>a.race.raceDate.localeCompare(b.race.raceDate)||a.race.track.localeCompare(b.race.track,'ja')||Number(a.race.raceNumber)-Number(b.race.raceNumber));
+}
+
+// Explicit alternative format; legacy version 1 remains strict and unchanged.
+// race contains the parsed four netkeiba sources; all six source URLs identify this race.
+export function createNetkeibaFallbackBundle(race, sources, trainingText, commentText, acquiredAt=new Date().toISOString()) {
+  const id=new URL(sources.race.url).searchParams.get('race_id');
+  if(!/^\d{12}$/.test(id||''))throw Error('代用元のレースIDが不正');
+  if(race.raceDate.slice(0,4)!==id.slice(0,4)||Number(race.raceNumber)!==Number(id.slice(-2)))throw Error('代用元の開催情報が不一致');
+  let parsed=parseNetkeibaTraining(trainingText,race.horses);
+  if(parsed.count!==race.horses.length)throw Error('代用調教の頭数不足');
+  parsed=parseNetkeibaComments(commentText,parsed.horses.map(h=>({...h,comment:'',commentRaw:'',commentSource:'',commentSourceMark:'',commentSourceStatus:''})));
+  const horses=parsed.horses.map(h=>({...h,comment:h.commentSource==='netkeiba'?h.comment:'',commentSource:'netkeiba',commentSourceStatus:h.commentSource==='netkeiba'&&h.comment?'substitute':'unavailable'}));
+  const bundle={type:'jra-ai-source-bundle',version:2,sourceMode:'netkeiba-fallback',complete:true,missing:[],acquiredAt,race:{...race,horses},sourceIds:{netkeiba:id},sources:{...sources,training:{...sources.training,count:horses.length,provider:'netkeiba'},comments:{...sources.comments,count:parsed.count,provider:'netkeiba',status:parsed.count===horses.length?'available':parsed.count?'partial':'unavailable'}},notes:['競馬ブック取得不能時の一時代用です。調教・掲載コメントの取得元はnetkeibaです。',`厩舎コメント未取得 ${horses.length-parsed.count}頭。未取得は空欄で保持し、既存の欠損時計算を使用します。`,'調教掲載評価を既存のS=92/A=82/B=70/C=56/D=40で換算。競馬ブック評価との同等性は未検証です。']};
+  validateSourceBundle(bundle);return bundle;
 }
