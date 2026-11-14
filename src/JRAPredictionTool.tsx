@@ -1,3 +1,4 @@
+import CoursePerformance from "./CoursePerformance";
 import { parseNetkeibaTraining, parseNetkeibaComments, fallbackSourceLabel } from "./netkeibaFallback";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { planBulkSave } from "./bulkSave";
@@ -3190,6 +3191,7 @@ export default function JRAPredictionTool() {
 {appPage==="results" && <main id="page-results" role="tabpanel" aria-labelledby="tab-results" className="app-page" tabIndex={-1}>
 <div className="app-page-heading"><h1>成績・結果</h1><p>保存した予想の振り返りと、結果の登録</p></div>
 <div className="app-result-overview mx-3 mt-3"><h2>事前に保存した予想の成績</h2><div className="app-stat-grid"><div><span>対象</span><strong>{integrityStats.prospective.topN}<small> R</small></strong></div><div><span>◎勝利</span><strong>{integrityStats.prospective.wins}<small> R</small></strong></div><div><span>◎勝率</span><strong>{integrityStats.prospective.topN?Math.round(integrityStats.prospective.wins/integrityStats.prospective.topN*100):0}<small> %</small></strong></div></div><p>旧記録・隔離された記録はこの集計に含めません。</p></div>
+<CoursePerformance records={savedRaces} />
 {resultEntryMode && (
         <div id="result-entry-panel" className="mx-3 mt-3 scroll-mt-3 rounded-xl border-2 border-amber-400 bg-amber-50 p-3 shadow-sm">
           <div className="flex items-start justify-between gap-3">
