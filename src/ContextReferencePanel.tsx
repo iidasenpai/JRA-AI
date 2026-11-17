@@ -7,10 +7,10 @@ export function ContextReferencePanel({value}) {
   if(!value)return null;
   const t=value.trend;
   return <section style={box} aria-label="蓄積実績と週末傾向">
-    <h2 style={{fontSize:18,fontWeight:800}}>蓄積実績・土曜からの参考情報</h2>
+    <h2 style={{fontSize:18,fontWeight:800}}>蓄積実績・同じ開催週の参考情報</h2>
     <p style={{color:'#cbd5e1',fontSize:13,marginTop:8}}>ファイルを読み込むだけで照合します。現在の点数・印は維持し、追加情報を使う参考候補を別保存します。</p>
     <div style={{marginTop:12,padding:12,border:'1px solid #475569',borderRadius:10}}>
-      <strong>週末傾向：{t.status}</strong>{t.basedOnDate&&<p>{t.basedOnDate} → {t.validFor} ／ {t.distanceBand} ／ {t.races}R</p>}<p style={{fontSize:13,marginTop:8}}>{t.reason}</p>
+      <strong>週末傾向：{t.status}</strong>{t.basedOnDate&&<p>{(t.basedOnDates?.length?t.basedOnDates:t.sourceDates||[t.basedOnDate]).join('・')} → {t.validFor} ／ {t.distanceBand} ／ {t.races}R</p>}<p style={{fontSize:13,marginTop:8}}>{t.reason}</p>
       {!!t.races&&<details style={{marginTop:8}}><summary>観測した通過位置・進路を見る</summary><p style={{fontSize:12,color:'#cbd5e1'}}>人気・能力調整前の観測値です。前残りや内外差を断定しません。</p>{['positions','paths','moves'].map(k=><div key={k} style={{marginTop:8}}><strong>{k==='positions'?'最初の通過位置':k==='paths'?'実際に通った進路':'映像等で確認した動き'}</strong>{Object.entries(t[k]||{}).map(([name,v]:any)=><p key={name}>{name}：{v.runners?`${v.places}/${v.runners}頭が3着内`:'資料なし'}</p>)}</div>)}</details>}
     </div>
     <div style={{marginTop:14}}><strong>現行の上位5頭</strong><p>{value.baselineOrder.slice(0,5).join('・')||'評価待ち'}</p><strong>追加情報を使う参考上位5頭</strong><p>{value.referenceOrder.slice(0,5).join('・')||'評価待ち'}{!value.changed&&value.referenceOrder.length?'（現行と同じ）':''}</p></div>

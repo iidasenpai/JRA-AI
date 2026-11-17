@@ -23,9 +23,13 @@ const band=d=>Number(d)<=1400?'短距離':Number(d)>=2200?'長距離':'中距離
 const tally=()=>({runners:0,places:0});
 export function saturdayContext(records,race,asOf=Date.now()) {
   const time=Date.parse(race.raceDate+'T00:00:00Z');
-  if(!Number.isFinite(time)||new Date(time).getUTCDay()!==0)return {status:'対象外',reason:'土曜→翌日曜の参考情報だけを使います。翌週への持ち越しはありません。',races:0};
-  const saturday=new Date(time-86400000).toISOString().slice(0,10);
-  const rows=records.filter(r=>r.status==='completed'&&!r.integrity?.quarantined&&r.raceDate===saturday&&r.track===race.track&&r.surface===race.surface&&band(r.distance)===band(race.distance)
+  const weekday=Number.isFinite(time)?new Date(time).getUTCDay():-1;
+  const offset=weekday===0?1:weekday===1?2:0;
+  if(!offset)return {status:'対象外',reason:'同じ週の土曜→日曜・月曜の参考情報だけを使います。翌週への持ち越しはありません。',races:0};
+  const saturday=new Date(time-offset*86400000).toISOString().slice(0,10);
+  const sourceDates=Array.from({length:offset},(_,i)=>new Date(time-(offset-i)*86400000).toISOString().slice(0,10));
+  const windowEnd=new Date(time+(weekday===0?1:0)*86400000).toISOString().slice(0,10);
+  const rows=records.filter(r=>r.status==='completed'&&!r.integrity?.quarantined&&sourceDates.includes(r.raceDate)&&r.track===race.track&&r.surface===race.surface&&band(r.distance)===band(race.distance)
     &&Number.isFinite(Date.parse(r.completedAt))&&Date.parse(r.completedAt)<=asOf&&r.resultContext&&Array.isArray(r.resultContext.horses)&&Date.parse(r.resultContext.observedAt)<=asOf);
   const paths={内:tally(),中:tally(),外:tally()},positions={前:tally(),中団:tally(),後:tally()},moves={捲り:tally()};
   const goings=[...new Set(rows.map(r=>r.resultContext.going).filter(Boolean))],weather=[...new Set(rows.map(r=>r.resultContext.weather).filter(Boolean))];
@@ -42,13 +46,13 @@ export function saturdayContext(records,race,asOf=Date.now()) {
     }
   }
   const env=race.environment,currentGoing=env?.going||race.going||'',sameGoing=goings.length===1&&goings[0]===currentGoing;
-  const observedSunday=env?.status==='observed'&&validTime(env.observedAt)&&Date.parse(env.observedAt)<=asOf&&new Date(Date.parse(env.observedAt)+9*3600000).toISOString().slice(0,10)===race.raceDate;
+  const observedTargetDay=env?.status==='observed'&&validTime(env.observedAt)&&Date.parse(env.observedAt)<=asOf&&new Date(Date.parse(env.observedAt)+9*3600000).toISOString().slice(0,10)===race.raceDate;
   const sameWeather=weather.length===1&&env?.weather&&weather[0]===env.weather;
   // Reference correction remains off until measured conditions and adequate observations match.
-  const usable=countedRaces>=3&&sameGoing&&observedSunday&&sameWeather&&positions.前.runners>=10&&positions.後.runners>=10;
-  return {status:countedRaces?'参考':'資料不足',basedOnDate:saturday,validFor:race.raceDate,track:race.track,surface:race.surface,distanceBand:band(race.distance),races:countedRaces,going:goings,weather,positions,paths,moves,usable,
-    reason:!countedRaces?'土曜の確定ラップ・通過順などが未収録です。着順だけから内外差を作りません。':!sameGoing?'土曜と日曜の馬場状態が一致・確認できないため補正しません。':!observedSunday?'日曜当日の馬場・天気の確認待ちです。土曜の傾向を仮説として表示します。':!sameWeather?'天気が変化・未確認のため補正しません。':!usable?'対象レース数・通過順の標本が少ないため補正しません。':'同条件での観測値を小さく参考評価へ反映。能力・人気を調整した因果推定ではありません。',
-    expiresAt:new Date(time+86400000).toISOString()};
+  const usable=countedRaces>=3&&sameGoing&&observedTargetDay&&sameWeather&&positions.前.runners>=10&&positions.後.runners>=10;
+  return {status:countedRaces?'参考':'資料不足',basedOnDate:saturday,basedOnDates:[...new Set(rows.map(r=>r.raceDate))].sort(),sourceDates,windowStart:saturday,windowEnd,validFor:race.raceDate,track:race.track,surface:race.surface,distanceBand:band(race.distance),races:countedRaces,going:goings,weather,positions,paths,moves,usable,
+    reason:!countedRaces?'同じ週・競馬場の前日までの確定ラップ・通過順などが未収録です。着順だけから内外差を作りません。':!sameGoing?'参照日と予想対象日の馬場状態が一致・確認できないため補正しません。':!observedTargetDay?'予想対象日当日の馬場・天気の確認待ちです。前日までの傾向を仮説として表示します。':!sameWeather?'天気が変化・未確認のため補正しません。':!usable?'対象レース数・通過順の標本が少ないため補正しません。':'同条件での観測値を小さく参考評価へ反映。能力・人気を調整した因果推定ではありません。',
+    expiresAt:new Date(Date.parse(windowEnd+'T00:00:00+09:00')+86400000).toISOString()};
 }
 export function weekendAdjustment(trend,h,fieldSize) {
   if(!trend.usable)return 0;
