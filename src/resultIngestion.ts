@@ -1,4 +1,5 @@
 // @ts-nocheck
+import {readResultContext} from "./weekendContext.ts";
 import { eventKey, resultNumbers } from './integrity';
 const tracks=['札幌','函館','福島','新潟','東京','中山','中京','京都','阪神','小倉'];
 const nameKey=s=>String(s||'').normalize('NFKC').replace(/[\s・･]/g,'');
@@ -34,6 +35,7 @@ export function validateResultCollection(data, now=Date.now()){
     }
     if(![1,2,3].every(n=>ranks.has(n)))fail('上位3頭が確定していません');
     if(!Array.isArray(r.payouts)||!['confirmed','unavailable'].includes(r.payoutStatus)||(r.payoutStatus==='unavailable'&&r.payouts.length)||(r.payoutStatus==='confirmed'&&!r.payouts.length))fail('払戻の取得状態が不正です');
+    readResultContext(r,data.acquiredAt);
     const payoutKeys=new Set(),top3=r.horses.filter(h=>Number(h.finish)<=3).sort((a,b)=>Number(a.finish)-Number(b.finish)).map(h=>String(h.umaban));
     for(const p of r.payouts){
       if(!payoutSizes[p.type]||!Array.isArray(p.combination)||p.combination.length!==payoutSizes[p.type]||!Number.isSafeInteger(p.amount)||p.amount<0||p.amount%10!==0||p.unit!==100)fail('払戻は券種・組合せ・100円あたりの確定金額を指定してください');
@@ -78,9 +80,11 @@ export function planResultImport(records,data,now=Date.now()){
       const after=result.horses.map(h=>`${h.umaban}:${h.finish}`).sort().join('|');
       if(before!==after){skip('保存済みの全頭着順と異なります');continue;}
     }
+    const incomingContext=readResultContext(result,data.acquiredAt);
+    const hasNewContext=!!incomingContext&&!race.resultContext;
     const hasNewPayouts=!existingPayouts.length&&result.payouts.length;
-    if(race.status==='completed'&&race.resultImport?.fullResults&&!hasNewPayouts){report.push({label,status:'same',reason:'反映済み（再学習を追加しません）'});continue;}
-    const updated={...race,status:'completed',completedAt:race.completedAt||result.confirmedAt,resultOrder:order.join('-'),
+    if(race.status==='completed'&&race.resultImport?.fullResults&&!hasNewPayouts&&!hasNewContext){report.push({label,status:'same',reason:'反映済み（再学習を追加しません）'});continue;}
+    const updated={...race,...(hasNewContext?{resultContext:incomingContext}:{}),status:'completed',completedAt:race.completedAt||result.confirmedAt,resultOrder:order.join('-'),
       learningEnabledAtResult:race.learningEnabledAtResult??(race.learningOn!==false),
       horses:race.horses.map(h=>({...h,finish:String(result.horses.find(x=>String(x.umaban)===String(h.umaban)).finish)})),
       resultPayouts:existingPayouts.length?existingPayouts:result.payouts.map(p=>({...p,combination:p.combination.map(String)})),

@@ -1,3 +1,6 @@
+import {buildHorseArchive,mergeArchiveHistory} from './horseArchive';
+import {buildContextReference} from './contextReference';
+import {ContextReferencePanel,ContextReferenceResults} from './ContextReferencePanel';
 import CoursePerformance from "./CoursePerformance";
 import { parseNetkeibaTraining, parseNetkeibaComments, fallbackSourceLabel } from "./netkeibaFallback";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
@@ -321,6 +324,7 @@ export default function JRAPredictionTool() {
   useEffect(()=>{if(savedRacesOpen){setAppPage("saved");window.scrollTo({top:0,behavior:"instant"});}},[savedRacesOpen]);
   const [analysisTab, setAnalysisTab] = useState<"review"|"conditions"|"backtest"|"misses">("review");
   const [resultOrderInput, setResultOrderInput] = useState("");
+  const [raceEnvironment,setRaceEnvironment]=useState<any>(null);
   const [learningHistory, setLearningHistory] = useState<any[]>([]);
   const [flowScenario, setFlowScenario] = useState<"main"|"alt">("main");
 
@@ -332,6 +336,7 @@ export default function JRAPredictionTool() {
   const [bulkSaving,setBulkSaving]=useState(false);
   const bulkSaveLock=useRef(false);
   const [sourceSelection,setSourceSelection]=useState("");
+  useEffect(()=>{if(loaded&&!bulkSaving&&sourceCollection.length)setSavedRaces(records=>mergeArchiveHistory(records,sourceCollection));},[loaded,bulkSaving,sourceCollection]);
   const [sourceMessage,setSourceMessage]=useState("");
   useEffect(()=>{(async()=>{
     try {const stored=await window.storage.get("jra-source-collection");if(stored?.value){const rows=validateSourceCollection(JSON.parse(stored.value));setSourceCollection(rows);setSourceSelection(sourceRaceKey(rows[0]));}}
@@ -347,6 +352,7 @@ export default function JRAPredictionTool() {
           const data = JSON.parse(res.value);
           if (data.raceName !== undefined) setRaceName(data.raceName);
           setRaceDate(data.raceDate||"");setRaceNumber(data.raceNumber||"");setScheduledStart(data.scheduledStart||"");
+          setRaceEnvironment(data.raceEnvironment||null);
           if (data.track) setTrack(data.track);
           if (data.surface) setSurface(data.surface);
           if (data.distance !== undefined) setDistance(data.distance);
@@ -419,12 +425,12 @@ export default function JRAPredictionTool() {
       try {
         await window.storage.set(
           "jra-tool-state",
-          JSON.stringify({ raceName, raceDate,raceNumber,scheduledStart,track, surface, distance, going, raceClass, paceType, learningOn, learned, historyCount, learningHistory, horses, weights, agariBonus, oddsOn,experimentalOn, decayScale, oddsStrength })
+          JSON.stringify({ raceEnvironment, raceName, raceDate,raceNumber,scheduledStart,track, surface, distance, going, raceClass, paceType, learningOn, learned, historyCount, learningHistory, horses, weights, agariBonus, oddsOn,experimentalOn, decayScale, oddsStrength })
         );
       } catch (e) { setStatus("設定の保存に失敗しました。全データ保存で退避してください"); }
     }, 400);
     return () => clearTimeout(t);
-  }, [loaded, raceName,raceDate,raceNumber,scheduledStart,track, surface, distance, going, raceClass, paceType, learningOn, learned, historyCount, learningHistory, horses, weights, agariBonus, oddsOn,experimentalOn, decayScale, oddsStrength]);
+  }, [loaded, raceEnvironment, raceName,raceDate,raceNumber,scheduledStart,track, surface, distance, going, raceClass, paceType, learningOn, learned, historyCount, learningHistory, horses, weights, agariBonus, oddsOn,experimentalOn, decayScale, oddsStrength]);
 
   useEffect(() => {
     if (!loaded || bulkSaving) return;
@@ -510,7 +516,7 @@ export default function JRAPredictionTool() {
       version: MODEL_VERSION,
       exportedAt: new Date().toISOString(),
       state: {
-        raceName,raceDate,raceNumber,scheduledStart,track,surface,distance,going,raceClass,paceType,
+        raceEnvironment,raceName,raceDate,raceNumber,scheduledStart,track,surface,distance,going,raceClass,paceType,
         learningOn, learned, historyCount, learningHistory, horses, weights,
         agariBonus, oddsOn,experimentalOn, decayScale, oddsStrength
       },
@@ -541,6 +547,7 @@ export default function JRAPredictionTool() {
             throw new Error("JRA-AIの全データバックアップではありません");
           }
           const st = data.state;
+          setRaceEnvironment(st.raceEnvironment||null);
           if (st.raceName !== undefined) setRaceName(st.raceName);
           setRaceDate(st.raceDate||"");setRaceNumber(st.raceNumber||"");setScheduledStart(st.scheduledStart||"");
           if (st.track) setTrack(st.track);
@@ -580,7 +587,7 @@ export default function JRAPredictionTool() {
   // ---- 行操作 ----
   const applySourceBundle = (bundle) => {
     const r=validateSourceBundle(bundle);
-    startNewRace(false);
+    startNewRace(false);setRaceEnvironment(r.environment||null);
     const existing=savedRaces.find(x=>x.status==='pending'&&eventKey(x)===eventKey(r));
     const rosterKey=hs=>(hs||[]).map(h=>`${h.umaban}:${String(h.name||'').replace(/[\s・･]/g,'')}`).sort().join('|');
     if(existing&&rosterKey(existing.horses)===rosterKey(r.horses))setActiveSavedRaceId(existing.id);
@@ -627,6 +634,7 @@ export default function JRAPredictionTool() {
   // 次レース開始時は「作業中のレース」だけを完全に初期化する。
   // 保存済みレース・学習済みウェイト・学習履歴には一切触れない。
   const startNewRace = (showMessage = true) => {
+    setRaceEnvironment(null);
     setRaceName("");setRaceDate("");setRaceNumber("");setScheduledStart("");
     setDistance("");
     setPaceType("M");
@@ -2232,6 +2240,8 @@ export default function JRAPredictionTool() {
 
   const computed = useMemo(()=>computeHorses({horses,weights,agariBonus,surface,distance,oddsOn,oddsStrength,paceType,learningOn,learned,experimentalOn}),[horses,weights,agariBonus,surface,distance,oddsOn,oddsStrength,paceType,learningOn,learned,experimentalOn]);
   const ranked = useMemo(()=>rankHorses(computed,{surface,oddsOn,experimentalOn}),[computed,surface,oddsOn,experimentalOn]);
+  const horseArchive=useMemo(()=>buildHorseArchive(savedRaces),[savedRaces]);
+  const contextReference=useMemo(()=>buildContextReference(savedRaces,{raceDate,raceNumber,scheduledStart,track,surface,distance,going,environment:raceEnvironment},ranked,horseArchive),[savedRaces,horseArchive,raceDate,raceNumber,scheduledStart,track,surface,distance,going,raceEnvironment,ranked]);
 
   const raceAnalytics = useMemo(() => {
     const scored = ranked.filter((h) => h._selectionScore !== null).sort((a,b)=>b._selectionScore-a._selectionScore);
@@ -2506,8 +2516,10 @@ export default function JRAPredictionTool() {
 
   const buildRaceSnapshot = (context, id: string = crypto.randomUUID(), previous: any = {}): any => {
     const {raceName,raceDate,raceNumber,scheduledStart,track,surface,distance,going,raceClass,paceType,learningOn,learned,weights,agariBonus,oddsOn,experimentalOn,decayScale,oddsStrength,confidence,dataQuality,flowPrediction,ranked}=context;
+    const reference=buildContextReference(savedRaces,{raceDate,raceNumber,scheduledStart,track,surface,distance,going,environment:context.environment},ranked,horseArchive);
     return ({
     ...previous,
+    contextReference:reference,environment:context.environment||null,
     id,
     title: raceName.trim() || `${track} ${surface}${distance || ""}m ${raceClass}`.trim(),
     raceName,raceDate,raceNumber,scheduledStart,modelVersion:MODEL_VERSION,learnedSnapshot:{...learned},
@@ -2532,7 +2544,7 @@ export default function JRAPredictionTool() {
     updatedAt: new Date().toISOString(),
   });
   };
-  const currentRaceSnapshot = (id: string = crypto.randomUUID(), previous: any = {}): any => buildRaceSnapshot({raceName,raceDate,raceNumber,scheduledStart,track,surface,distance,going,raceClass,paceType,learningOn,learned,weights,agariBonus,oddsOn,experimentalOn,decayScale,oddsStrength,confidence,dataQuality,flowPrediction,ranked},id,previous);
+  const currentRaceSnapshot = (id: string = crypto.randomUUID(), previous: any = {}): any => buildRaceSnapshot({environment:raceEnvironment,raceName,raceDate,raceNumber,scheduledStart,track,surface,distance,going,raceClass,paceType,learningOn,learned,weights,agariBonus,oddsOn,experimentalOn,decayScale,oddsStrength,confidence,dataQuality,flowPrediction,ranked},id,previous);
 
   const saveAllSourceRaces = async () => {
     if(!loaded || bulkSaveLock.current)return;
@@ -2587,6 +2599,7 @@ export default function JRAPredictionTool() {
   };
 
   const loadSavedRace = (race: any, forResult = false) => {
+    setRaceEnvironment(race.environment||null);
     setRaceName(race.raceName || "");setRaceDate(race.raceDate||"");setRaceNumber(race.raceNumber||"");setScheduledStart(race.scheduledStart||"");
     setTrack(race.track || "東京");
     setSurface(race.surface || "芝");
@@ -3083,6 +3096,7 @@ export default function JRAPredictionTool() {
           <div className="mt-1 text-xs font-bold">{dataQuality.label}</div><div className="mt-1 text-[10px] text-gray-500">{dataQuality.issues.length?dataQuality.issues.join("・"):"主要データが揃っています"}</div>
         </div>
       </div>
+<ContextReferencePanel value={contextReference} />
 {activeSavedRaceId && (()=>{const r=savedRaces.find(x=>x.id===activeSavedRaceId);return r?<div className="mx-3 mt-3 rounded-lg border border-indigo-500 p-3 text-xs"><div className="font-bold">保存した予想（回顧・成績の基準）</div><div className="mt-1">{predictionOrder(r).filter(h=>h.mark).map(h=>`${h.mark}${h.umaban} ${h.name}`).join(" ／ ")}</div><div className="mt-1">以下の全頭評価は現行方式による参考再評価です。結果登録で保存予想を上書きしません。</div><button onClick={correctRaceIdentity} className="mt-2 rounded bg-indigo-700 p-2">入力中の開催日・Rで開催情報を訂正</button></div>:null;})()}
 {!buyDecision.main && <div className="app-empty mx-3 mt-3"><h2>予想に必要なデータを入力してください</h2><p>取得データを読み込むか、入力ページで出走馬と指数を入力すると予想が表示されます。</p><button type="button" onClick={()=>openPage("input")} className="app-action">入力ページへ</button></div>}
 {buyDecision.main && (
@@ -3192,6 +3206,7 @@ export default function JRAPredictionTool() {
 <div className="app-page-heading"><h1>成績・結果</h1><p>保存した予想の振り返りと、結果の登録</p></div>
 <div className="app-result-overview mx-3 mt-3"><h2>事前に保存した予想の成績</h2><div className="app-stat-grid"><div><span>対象</span><strong>{integrityStats.prospective.topN}<small> R</small></strong></div><div><span>◎勝利</span><strong>{integrityStats.prospective.wins}<small> R</small></strong></div><div><span>◎勝率</span><strong>{integrityStats.prospective.topN?Math.round(integrityStats.prospective.wins/integrityStats.prospective.topN*100):0}<small> %</small></strong></div></div><p>旧記録・隔離された記録はこの集計に含めません。</p></div>
 <CoursePerformance records={savedRaces} />
+<ContextReferenceResults records={savedRaces} />
 {resultEntryMode && (
         <div id="result-entry-panel" className="mx-3 mt-3 scroll-mt-3 rounded-xl border-2 border-amber-400 bg-amber-50 p-3 shadow-sm">
           <div className="flex items-start justify-between gap-3">
@@ -3305,7 +3320,7 @@ export default function JRAPredictionTool() {
 {appPage==="settings" && <main id="page-settings" role="tabpanel" aria-labelledby="tab-settings" className="app-page" tabIndex={-1}>
 <div className="app-page-heading"><h1>設定</h1><p>予想の設定・検証モード・学習状況</p></div>
 <div className="mx-3 mt-3 rounded-lg border border-slate-600 p-3 text-xs">
-        v3.13.4-fix1 ／ 事前固定の検証 {integrityStats.prospective.n}件（◎あり{integrityStats.prospective.topN}件）・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
+        v3.13.4-context1 ／ 事前固定の検証 {integrityStats.prospective.n}件（◎あり{integrityStats.prospective.topN}件）・◎勝利 {integrityStats.prospective.wins}件 ／ 旧記録 {integrityStats.legacy.n}件 ／ 除外 {savedRaces.filter(r=>r.integrity?.quarantined).length}件
         <label className="mt-2 mb-2 flex gap-2"><input type="checkbox" checked={experimentalOn} onChange={e=>setExperimentalOn(e.target.checked)} />新しい評価方式を検証する（指数不足の補助評価・固定頭数。過去比較で優位性未確認）</label>
         <div className="mt-1">旧記録の予想は保存値を保持します。修正後の再予想を過去の的中実績には加えません。発走日時未入力の新規記録も事前検証とは分けます。</div>
       </div>

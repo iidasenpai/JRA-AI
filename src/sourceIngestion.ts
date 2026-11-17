@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { parseNetkeibaTraining, parseNetkeibaComments } from './netkeibaFallback';
 import { strictNumber } from './integrity';
+import {enrichSourceHistory} from './horseArchive.ts';
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
 const normalize=s=>String(s||'').replace(/\r/g,'').replace(/\u00a0/g,' ');
 const indexValue=s=>{const t=String(s||'').trim();if(/^(?:-|--|未)$/.test(t))return '';const n=strictNumber(t);if(n===null||n< -1000||n>1000)throw Error(`指数列に異常値: ${t}`);return String(n);};
@@ -182,7 +183,7 @@ export function validateSourceCollection(data){
     if(seen.has(key))throw Error('同じ開催日・競馬場・レース番号が重複しています');
     seen.add(key);
   });
-  return [...bundles].sort((a,b)=>a.race.raceDate.localeCompare(b.race.raceDate)||a.race.track.localeCompare(b.race.track,'ja')||Number(a.race.raceNumber)-Number(b.race.raceNumber));
+  return bundles.map(enrichSourceHistory).sort((a,b)=>a.race.raceDate.localeCompare(b.race.raceDate)||a.race.track.localeCompare(b.race.track,'ja')||Number(a.race.raceNumber)-Number(b.race.raceNumber));
 }
 
 // Explicit alternative format; legacy version 1 remains strict and unchanged.

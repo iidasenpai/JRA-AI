@@ -59,6 +59,7 @@ export const freezePrediction = (race,provenance=(race.scheduledStart && Date.pa
   // 予想保存時の信頼度を予想と一緒に固定する（検証用の記録。予想の計算・点数・印には影響しない）。
   // 旧記録(legacy-unverified)には現在の値を埋めない。値がない記録は「当時の記録なし」として扱う。
   if(provenance!=='legacy-unverified' && race.confidenceSnapshot) snapshot.confidenceSnapshot=clone(race.confidenceSnapshot);
+  if(provenance!=='legacy-unverified' && race.contextReference?.active) snapshot.contextReference=clone(race.contextReference);
   return snapshot;
 };
 // 予想保存時に固定した信頼度。記録がなければ null（現在の confidenceSnapshot では代用しない）。
