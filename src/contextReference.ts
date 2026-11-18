@@ -1,4 +1,5 @@
 // @ts-nocheck
+import {buildRaceExplanation,describeConditions} from './raceExplanation.ts';
 import {buildHorseArchive,profileForHorse} from './horseArchive.ts';
 import {saturdayContext,weekendAdjustment} from './weekendContext.ts';
 export function buildContextReference(records,race,ranked,archive=buildHorseArchive(records),now=Date.now()) {
@@ -13,7 +14,9 @@ export function buildContextReference(records,race,ranked,archive=buildHorseArch
   }).filter(h=>Number.isFinite(h.baseScore));
   const ordered=[...rows].sort((a,b)=>(b.baseScore+b.horseAdj+b.weekendAdj)-(a.baseScore+a.horseAdj+a.weekendAdj)||a.baseRank-b.baseRank);
   ordered.forEach((h,i)=>h.referenceRank=i+1);
-  return {version:1,method:'history-weekend-reference-v1',capturedAt:new Date(now).toISOString(),asOf:valid?new Date(cutoff).toISOString():null,
+  const explanation=buildRaceExplanation(race,ranked,{baselineOrder:[...rows].sort((a,b)=>a.baseRank-b.baseRank).map(h=>h.umaban),horses:rows},cutoff);
+  rows.forEach(h=>{h.conditionEvidence=describeConditions(h.profile,explanation.observed&&!!race.environment?.going&&race.environment.going===race.going);});
+  return {explanation,version:1,method:'history-weekend-reference-v1',capturedAt:new Date(now).toISOString(),asOf:valid?new Date(cutoff).toISOString():null,
     active:valid,baselineOrder:[...rows].sort((a,b)=>a.baseRank-b.baseRank).map(h=>h.umaban),referenceOrder:ordered.map(h=>h.umaban),
     changed:ordered.some((h,i)=>h.baseRank!==i+1),trend,horses:rows,
     limits:'検証用の参考候補。現行の点数・印には反映しません。実績は小標本補正、馬別±1点・週末±0.5点の仮ルール。効果は未検証です。'};
