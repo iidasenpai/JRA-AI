@@ -248,7 +248,7 @@ export function computeHorses({horses,weights,agariBonus,surface,distance,oddsOn
     });
 
 }
-export function rankHorses(computed,{surface,oddsOn,experimentalOn=false}){
+export function rankHorses(computed,{surface,oddsOn,experimentalOn=false,runningTrendEnabled=false}){
     const withScore = computed.filter((h) => h._selectionScore !== null && h.mark!=="消");
     const abilitySorted = [...withScore].sort((a, b) => b._finalScore - a._finalScore);
     const pct = (value:any, values:number[]) => {
@@ -269,7 +269,7 @@ export function rankHorses(computed,{surface,oddsOn,experimentalOn=false}){
       // 人気薄でも能力がフィールド上位から明確に抜ける場合は逆張りを許容。
       const abilityTop=abilitySorted[0]?Number(abilitySorted[0]._finalScore):-999;
       if(pop!==null && pop>=4 && abilityTop-ability<0.8) market*=0.55;
-      return ability + fit + recent + market;
+      return ability + fit + recent + market + (runningTrendEnabled?Number(h._runningTrendAdj||0):0);
     };
     // 勝ち切り順位。市場は「人気馬を自動で◎にする」のではなく、僅差時だけ逆張り◎を抑える安全弁として使う。
     let winSorted=[...withScore].sort((a,b)=>winScore(b)-winScore(a));

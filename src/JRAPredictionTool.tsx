@@ -1,3 +1,5 @@
+import {validateRunningTrend,prepareRunningTrend} from './runningTrend';
+import {RunningTrendPanel} from './RunningTrendPanel';
 import {buildHorseArchive,mergeArchiveHistory} from './horseArchive';
 import {buildContextReference} from './contextReference';
 import {ContextReferencePanel,ContextReferenceResults} from './ContextReferencePanel';
@@ -332,6 +334,10 @@ export default function JRAPredictionTool() {
   const [resultImportMessage,setResultImportMessage]=useState("");
   const resultImportPlan=useMemo(()=>resultImportData?planResultImport(savedRaces,resultImportData):null,[savedRaces,resultImportData]);
   const [useNetFallback,setUseNetFallback]=useState(false);
+  const [runningTrend,setRunningTrend]=useState<any>(null);
+  const [runningTrendOn,setRunningTrendOn]=useState(false);
+  const [runningTrendMessage,setRunningTrendMessage]=useState("");
+  const importRunningTrend=()=>{const input=document.createElement("input");input.type="file";input.accept=".json,application/json";input.onchange=async()=>{try{const data=validateRunningTrend(JSON.parse(await input.files[0].text()));setRunningTrend(data);setRunningTrendOn(false);setRunningTrendMessage("読み込みました。根拠と条件を確認して反映をオンにできます。");}catch(e){setRunningTrendMessage(e.message||"読み込みに失敗しました");}};input.click();};
   const [sourceCollection,setSourceCollection]=useState<any[]>([]);
   const [bulkSaving,setBulkSaving]=useState(false);
   const bulkSaveLock=useRef(false);
@@ -353,6 +359,8 @@ export default function JRAPredictionTool() {
           if (data.raceName !== undefined) setRaceName(data.raceName);
           setRaceDate(data.raceDate||"");setRaceNumber(data.raceNumber||"");setScheduledStart(data.scheduledStart||"");
           setRaceEnvironment(data.raceEnvironment||null);
+          if(data.runningTrend){try{setRunningTrend(validateRunningTrend(data.runningTrend));}catch{setRunningTrendMessage("保存された傾向ファイルを検証できませんでした");}}
+          setRunningTrendOn(false);
           if (data.track) setTrack(data.track);
           if (data.surface) setSurface(data.surface);
           if (data.distance !== undefined) setDistance(data.distance);
@@ -425,12 +433,12 @@ export default function JRAPredictionTool() {
       try {
         await window.storage.set(
           "jra-tool-state",
-          JSON.stringify({ raceEnvironment, raceName, raceDate,raceNumber,scheduledStart,track, surface, distance, going, raceClass, paceType, learningOn, learned, historyCount, learningHistory, horses, weights, agariBonus, oddsOn,experimentalOn, decayScale, oddsStrength })
+          JSON.stringify({ runningTrend, raceEnvironment, raceName, raceDate,raceNumber,scheduledStart,track, surface, distance, going, raceClass, paceType, learningOn, learned, historyCount, learningHistory, horses, weights, agariBonus, oddsOn,experimentalOn, decayScale, oddsStrength })
         );
       } catch (e) { setStatus("設定の保存に失敗しました。全データ保存で退避してください"); }
     }, 400);
     return () => clearTimeout(t);
-  }, [loaded, raceEnvironment, raceName,raceDate,raceNumber,scheduledStart,track, surface, distance, going, raceClass, paceType, learningOn, learned, historyCount, learningHistory, horses, weights, agariBonus, oddsOn,experimentalOn, decayScale, oddsStrength]);
+  }, [loaded, runningTrend, raceEnvironment, raceName,raceDate,raceNumber,scheduledStart,track, surface, distance, going, raceClass, paceType, learningOn, learned, historyCount, learningHistory, horses, weights, agariBonus, oddsOn,experimentalOn, decayScale, oddsStrength]);
 
   useEffect(() => {
     if (!loaded || bulkSaving) return;
@@ -516,7 +524,7 @@ export default function JRAPredictionTool() {
       version: MODEL_VERSION,
       exportedAt: new Date().toISOString(),
       state: {
-        raceEnvironment,raceName,raceDate,raceNumber,scheduledStart,track,surface,distance,going,raceClass,paceType,
+        runningTrend,raceEnvironment,raceName,raceDate,raceNumber,scheduledStart,track,surface,distance,going,raceClass,paceType,
         learningOn, learned, historyCount, learningHistory, horses, weights,
         agariBonus, oddsOn,experimentalOn, decayScale, oddsStrength
       },
@@ -548,6 +556,7 @@ export default function JRAPredictionTool() {
           }
           const st = data.state;
           setRaceEnvironment(st.raceEnvironment||null);
+          setRunningTrend(st.runningTrend?validateRunningTrend(st.runningTrend):null);setRunningTrendOn(false);
           if (st.raceName !== undefined) setRaceName(st.raceName);
           setRaceDate(st.raceDate||"");setRaceNumber(st.raceNumber||"");setScheduledStart(st.scheduledStart||"");
           if (st.track) setTrack(st.track);
@@ -2239,7 +2248,10 @@ export default function JRAPredictionTool() {
   const wSum = weights.best + weights.avg5 + weights.dist + weights.course || 1;
 
   const computed = useMemo(()=>computeHorses({horses,weights,agariBonus,surface,distance,oddsOn,oddsStrength,paceType,learningOn,learned,experimentalOn}),[horses,weights,agariBonus,surface,distance,oddsOn,oddsStrength,paceType,learningOn,learned,experimentalOn]);
-  const ranked = useMemo(()=>rankHorses(computed,{surface,oddsOn,experimentalOn}),[computed,surface,oddsOn,experimentalOn]);
+  const runningTrendRace={raceDate,scheduledStart,track,surface,distance,going,paceType};
+  const runningTrendReport=useMemo(()=>prepareRunningTrend(computed,runningTrendRace,runningTrend,runningTrendOn),[computed,raceDate,scheduledStart,track,surface,distance,going,paceType,runningTrend,runningTrendOn]);
+  const baselineRanked=useMemo(()=>rankHorses(computed,{surface,oddsOn,experimentalOn}),[computed,surface,oddsOn,experimentalOn]);
+  const ranked=useMemo(()=>rankHorses(runningTrendReport.horses,{surface,oddsOn,experimentalOn,runningTrendEnabled:runningTrendReport.applied}),[runningTrendReport,surface,oddsOn,experimentalOn]);
   const horseArchive=useMemo(()=>buildHorseArchive(savedRaces),[savedRaces]);
   const contextReference=useMemo(()=>buildContextReference(savedRaces,{raceDate,raceNumber,scheduledStart,track,surface,distance,going,paceType,environment:raceEnvironment},ranked,horseArchive),[savedRaces,horseArchive,raceDate,raceNumber,scheduledStart,track,surface,distance,going,paceType,raceEnvironment,ranked]);
 
@@ -2519,6 +2531,7 @@ export default function JRAPredictionTool() {
     const reference=buildContextReference(savedRaces,{raceDate,raceNumber,scheduledStart,track,surface,distance,going,paceType,environment:context.environment},ranked,horseArchive);
     return ({
     ...previous,
+    runningTrendSnapshot:ranked.some(h=>h._runningTrendReasons?.length)?{file:ranked.find(h=>h._runningTrendFile)?._runningTrendFile,adjustments:ranked.filter(h=>h._runningTrendReasons?.length).map(h=>({umaban:h.umaban,points:h._runningTrendAdj,reasons:h._runningTrendReasons}))}:null,
     contextReference:reference,environment:context.environment||null,
     id,
     title: raceName.trim() || `${track} ${surface}${distance || ""}m ${raceClass}`.trim(),
@@ -2557,7 +2570,9 @@ export default function JRAPredictionTool() {
         const r=bundle.race;
         const inputHorses=r.horses.map(h=>autoCompleteHorseFactors({...cleanHorse(h),id:crypto.randomUUID(),finish:'',mark:h.entryStatus==='取消'?'消':'',_sourceBundle:{acquiredAt:bundle.acquiredAt,sourceIds:bundle.sourceIds}},r));
         const settings={...r,weights,agariBonus,oddsOn,oddsStrength,learningOn,learned,experimentalOn,decayScale};
-        const batchRanked=rankHorses(computeHorses({...settings,horses:inputHorses}),settings);
+        const batchComputed=computeHorses({...settings,horses:inputHorses});
+        const batchTrend=prepareRunningTrend(batchComputed,r,runningTrend,runningTrendOn);
+        const batchRanked=rankHorses(batchTrend.horses,{...settings,runningTrendEnabled:batchTrend.applied});
         const quality=calculateDataQuality(batchRanked,oddsOn);
         const snapshot=buildRaceSnapshot({...settings,ranked:batchRanked,dataQuality:quality,confidence:confidenceAssessment(batchRanked,quality,savedRaces,experimentalOn),flowPrediction:calculateFlowPrediction(batchRanked,r)});
         snapshot.predictionSnapshot=freezePrediction(snapshot);
@@ -3096,6 +3111,7 @@ export default function JRAPredictionTool() {
           <div className="mt-1 text-xs font-bold">{dataQuality.label}</div><div className="mt-1 text-[10px] text-gray-500">{dataQuality.issues.length?dataQuality.issues.join("・"):"主要データが揃っています"}</div>
         </div>
       </div>
+<RunningTrendPanel file={runningTrend} report={runningTrendReport} enabled={runningTrendOn} onToggle={setRunningTrendOn} onImport={importRunningTrend} message={runningTrendMessage} ranked={ranked} baseline={baselineRanked} />
 <ContextReferencePanel value={contextReference} />
 {activeSavedRaceId && (()=>{const r=savedRaces.find(x=>x.id===activeSavedRaceId);return r?<div className="mx-3 mt-3 rounded-lg border border-indigo-500 p-3 text-xs"><div className="font-bold">保存した予想（回顧・成績の基準）</div><div className="mt-1">{predictionOrder(r).filter(h=>h.mark).map(h=>`${h.mark}${h.umaban} ${h.name}`).join(" ／ ")}</div><div className="mt-1">以下の全頭評価は現行方式による参考再評価です。結果登録で保存予想を上書きしません。</div><button onClick={correctRaceIdentity} className="mt-2 rounded bg-indigo-700 p-2">入力中の開催日・Rで開催情報を訂正</button></div>:null;})()}
 {!buyDecision.main && <div className="app-empty mx-3 mt-3"><h2>予想に必要なデータを入力してください</h2><p>取得データを読み込むか、入力ページで出走馬と指数を入力すると予想が表示されます。</p><button type="button" onClick={()=>openPage("input")} className="app-action">入力ページへ</button></div>}

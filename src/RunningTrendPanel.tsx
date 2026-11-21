@@ -1,0 +1,10 @@
+// @ts-nocheck
+import React from 'react';
+export function RunningTrendPanel({file,report,enabled,onToggle,onImport,message,ranked,baseline}){
+ const order=hs=>hs.filter(h=>h._rank).sort((a,b)=>a._rank-b._rank);
+ const before=new Map(baseline.map(h=>[h.id,h]));
+ return <section style={{margin:'16px 12px',padding:18,border:'1px solid #5d9481',borderRadius:14}}><h2 style={{fontWeight:800,fontSize:19}}>走行解析を翌週の予想に使う</h2><p style={{fontSize:13,margin:'8px 0'}}>手入力した走行ノート → ChatGPTで分析 → 分析済み傾向ファイルを読込。</p><button type="button" onClick={onImport} className="rounded bg-emerald-700 px-3 py-3 font-bold text-white">分析済み傾向JSONを読み込む</button><label style={{display:'block',marginTop:14}}><input type="checkbox" checked={enabled} disabled={!file} onChange={e=>onToggle(e.target.checked)} /> 条件が一致した傾向を、これから保存する予想の印に反映</label>{message&&<p role="status" style={{fontSize:13,marginTop:8}}>{message}</p>}
+ {file&&<div style={{marginTop:12}}><strong>{file.summary}</strong><p style={{fontSize:12}}>適用期間：{file.validFrom} ～ {file.validTo} ／ 根拠 {file.sourceRaces.length}レース</p><details><summary>根拠と適用条件</summary>{file.rules.map(q=><p key={q.id} style={{fontSize:13,marginTop:8}}>{q.status}：{q.track} {q.surface} {q.minDistance}～{q.maxDistance}m・{q.goings.join('/')} ／ {q.selector.value} {q.points>0?'+':''}{q.points}点<br/>{q.reason}</p>)}</details></div>}
+ <p style={{marginTop:12,fontSize:13}}>{report.reason}</p>{report.applied&&<div style={{overflowX:'auto'}}><table style={{width:'100%',fontSize:13}}><thead><tr><th>馬</th><th>基本の印</th><th>傾向補正</th><th>反映後の印</th></tr></thead><tbody>{order(ranked).map(h=><tr key={h.id}><td style={{padding:8}}>{h.umaban} {h.name}</td><td>{before.get(h.id)?._autoMark||'—'}</td><td>{h._runningTrendAdj>0?'+':''}{h._runningTrendAdj||0}</td><td>{h._autoMark||'—'}</td></tr>)}</tbody></table>{ranked.filter(h=>h._runningTrendReasons?.length).map(h=><p key={h.id} style={{fontSize:12,marginTop:8}}>{h.umaban} {h.name}：{h._runningTrendReasons.map(q=>q.reason).join(' / ')}</p>)}</div>}
+ <p style={{fontSize:12,marginTop:10}}>保存済みの予想は書き換えません。枠番から進路を推測しません。日付や条件が違う場合、判断保留の分析は加点しません。補正は試験運用です。</p></section>;
+}
